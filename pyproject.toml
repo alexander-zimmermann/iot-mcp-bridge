@@ -1,0 +1,81 @@
+[project]
+name = "iot-mcp-bridge"
+version = "0.1.0"
+description = "MCP server bridging homelab IoT data (KNX, EMS, WARP, SolarEdge) to Claude.ai via TimescaleDB"
+readme = "README.md"
+license = "GPL-2.0-or-later"
+requires-python = ">=3.14.4"
+authors = [
+    { name = "Alexander Zimmermann" },
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "License :: OSI Approved :: GNU General Public License v2 or later (GPLv2+)",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Home Automation",
+]
+dependencies = [
+    "fastmcp>=2.0.0",
+    "uvicorn[standard]>=0.34.0",
+    "psycopg[binary,pool]>=3.2.0",
+    "pydantic>=2.13.3",
+    "pydantic-settings>=2.14.0",
+    "structlog>=25.1.0",
+    "pyjwt[crypto]>=2.10.0",
+    "httpx>=0.28.0",
+    "cachetools>=5.5.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=9.0.3",
+    "pytest-asyncio>=1.3.0",
+    "pytest-cov>=7.1.0",
+    "testcontainers[postgres]>=4.10.0",
+    "respx>=0.22.0",
+    "ruff>=0.15.12",
+    "mypy>=1.20.2",
+    "pre-commit>=4.6.0",
+]
+
+[project.scripts]
+iot-mcp-bridge = "iot_mcp_bridge.__main__:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/iot_mcp_bridge"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py314"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP", "B", "A", "C4", "RET", "SIM", "ARG"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["ARG001"]  # pytest fixtures injected for setup side-effects
+
+[tool.mypy]
+python_version = "3.14"
+strict = true
+warn_return_any = true
+warn_unused_configs = true
+warn_unused_ignores = true
+
+[[tool.mypy.overrides]]
+# psycopg's dict_row factory returns dicts at runtime but the stubs cannot
+# express that, so row["col"] reads are flagged. We rely on tests instead.
+module = ["iot_mcp_bridge.tools.schema", "iot_mcp_bridge.tools.timeseries"]
+disable_error_code = ["call-overload", "attr-defined", "index", "dict-item", "assignment"]
+
+[[tool.mypy.overrides]]
+module = ["fastmcp", "fastmcp.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
