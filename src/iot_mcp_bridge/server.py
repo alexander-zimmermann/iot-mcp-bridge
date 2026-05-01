@@ -82,32 +82,36 @@ async def _healthz(_request: Any) -> JSONResponse:
     return JSONResponse({"status": "ok" if db_ok else "degraded", "db": db_ok}, status_code=status)
 
 
-@asynccontextmanager
-async def _lifespan(_app: Starlette) -> AsyncIterator[None]:
-    global _settings
-    _settings = load_settings()
-    configure_logging(_settings.log_level, _settings.log_format)
-    auth_module.configure(_settings)
-    await db.init_pool(_settings)
-    log.info(
-        "iot_mcp_bridge_ready",
-        host=_settings.host,
-        port=_settings.port,
-        auth_enabled=_settings.auth_enabled,
-    )
-    try:
-        yield
-    finally:
-        await db.close_pool()
-
-
 def build_app() -> Starlette:
+    # FastMCP's StreamableHTTPSessionManager runs as part of mcp_app.lifespan;
+    # the parent Starlette app must include it or tool calls fail with
+    # "Task group is not initialized".
     mcp_app = mcp.http_app()
+
+    @asynccontextmanager
+    async def lifespan(app: Starlette) -> AsyncIterator[None]:
+        global _settings
+        _settings = load_settings()
+        configure_logging(_settings.log_level, _settings.log_format)
+        auth_module.configure(_settings)
+        await db.init_pool(_settings)
+        log.info(
+            "iot_mcp_bridge_ready",
+            host=_settings.host,
+            port=_settings.port,
+            auth_enabled=_settings.auth_enabled,
+        )
+        try:
+            async with mcp_app.lifespan(app):
+                yield
+        finally:
+            await db.close_pool()
+
     routes = [
         Route("/healthz", _healthz, methods=["GET"]),
         Mount("/", app=mcp_app),
     ]
-    return Starlette(routes=routes, lifespan=_lifespan)
+    return Starlette(routes=routes, lifespan=lifespan)
 
 
 app = build_app()
