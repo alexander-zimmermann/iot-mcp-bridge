@@ -16,7 +16,7 @@ classifiers = [
     "Topic :: Home Automation",
 ]
 dependencies = [
-    "fastmcp>=2.14.7",
+    "fastmcp>=3.2.4",
     "uvicorn[standard]>=0.46.0",
     "psycopg[binary,pool]>=3.3.3",
     "pydantic>=2.13.3",
@@ -24,7 +24,7 @@ dependencies = [
     "structlog>=25.5.0",
     "pyjwt[crypto]>=2.12.1",
     "httpx>=0.28.1",
-    "cachetools>=5.5.2",
+    "cachetools>=7.0.6",
 ]
 
 [project.optional-dependencies]
