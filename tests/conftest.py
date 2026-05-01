@@ -20,27 +20,64 @@ def timescaledb_container() -> PostgresContainer:
     container = PostgresContainer(
         TIMESCALEDB_IMAGE, username="test", password="test", dbname="homelab"
     )
-    # TimescaleDB needs the extension loaded; the official image has it as a shared lib
-    # but autoloads only when the extension is created in the database.
     container.start()
     try:
-        with psycopg.connect(
-            host=container.get_container_host_ip(),
-            port=int(container.get_exposed_port(5432)),
-            user="test",
-            password="test",
-            dbname="homelab",
-            autocommit=True,
-        ) as conn:
+        conn_kwargs = {
+            "host": container.get_container_host_ip(),
+            "port": int(container.get_exposed_port(5432)),
+            "user": "test",
+            "password": "test",
+            "dbname": "homelab",
+            "autocommit": True,
+        }
+        # 1) Extension + tables + seed (regular DDL/DML, autocommit-safe).
+        conn = psycopg.connect(**conn_kwargs)
+        try:
             conn.execute("CREATE EXTENSION IF NOT EXISTS timescaledb")
             _seed(conn)
+        finally:
+            conn.close()
+
+        # 2) Continuous aggregate setup. `CALL refresh_continuous_aggregate()`
+        #    must run outside any transaction block — open a fresh connection
+        #    and issue each statement separately so psycopg cannot wrap them.
+        conn = psycopg.connect(**conn_kwargs)
+        try:
+            conn.execute(
+                """
+                CREATE MATERIALIZED VIEW knx_1h
+                WITH (timescaledb.continuous) AS
+                SELECT
+                    time_bucket('1 hour', time) AS bucket,
+                    ga,
+                    avg(value)  AS value,
+                    count(*)    AS samples
+                FROM knx
+                GROUP BY bucket, ga
+                WITH NO DATA
+                """
+            )
+            conn.execute(
+                """
+                SELECT add_continuous_aggregate_policy(
+                    'knx_1h',
+                    start_offset => INTERVAL '7 days',
+                    end_offset   => INTERVAL '5 minutes',
+                    schedule_interval => INTERVAL '1 hour'
+                )
+                """
+            )
+            conn.execute("CALL refresh_continuous_aggregate('knx_1h', NULL, NULL)")
+        finally:
+            conn.close()
+
         yield container
     finally:
         container.stop()
 
 
 def _seed(conn: psycopg.Connection) -> None:
-    """Set up two hypertables + one continuous aggregate with a few rows."""
+    """Set up two hypertables and seed a few rows. Caller owns the connection."""
     conn.execute(
         """
         CREATE TABLE knx (
@@ -49,16 +86,22 @@ def _seed(conn: psycopg.Connection) -> None:
             dpt  TEXT,
             value DOUBLE PRECISION,
             raw  JSONB
-        );
-        SELECT create_hypertable('knx', by_range('time'));
-
+        )
+        """
+    )
+    conn.execute("SELECT create_hypertable('knx', by_range('time'))")
+    conn.execute(
+        """
         CREATE TABLE ems_esp (
             time TIMESTAMPTZ NOT NULL,
             topic TEXT NOT NULL,
             raw  JSONB NOT NULL
-        );
-        SELECT create_hypertable('ems_esp', by_range('time'));
-
+        )
+        """
+    )
+    conn.execute("SELECT create_hypertable('ems_esp', by_range('time'))")
+    conn.execute(
+        """
         INSERT INTO knx
         SELECT
             NOW() - (i || ' minutes')::interval,
@@ -66,8 +109,11 @@ def _seed(conn: psycopg.Connection) -> None:
             '9.001',
             20 + (i % 10),
             jsonb_build_object('value', 20 + (i % 10), 'unit', 'celsius')
-        FROM generate_series(0, 200) AS i;
-
+        FROM generate_series(0, 200) AS i
+        """
+    )
+    conn.execute(
+        """
         INSERT INTO ems_esp
         SELECT
             NOW() - (i || ' minutes')::interval,
@@ -77,29 +123,7 @@ def _seed(conn: psycopg.Connection) -> None:
                 'return_temp', 30 + (i % 15),
                 'burner_power', CASE WHEN i % 3 = 0 THEN 50 ELSE 0 END
             )
-        FROM generate_series(0, 200) AS i;
-        """
-    )
-
-    conn.execute(
-        """
-        CREATE MATERIALIZED VIEW knx_1h
-        WITH (timescaledb.continuous) AS
-        SELECT
-            time_bucket('1 hour', time) AS bucket,
-            ga,
-            avg(value)  AS value,
-            count(*)    AS samples
-        FROM knx
-        GROUP BY bucket, ga
-        WITH NO DATA;
-        SELECT add_continuous_aggregate_policy(
-            'knx_1h',
-            start_offset => INTERVAL '7 days',
-            end_offset   => INTERVAL '5 minutes',
-            schedule_interval => INTERVAL '1 hour'
-        );
-        CALL refresh_continuous_aggregate('knx_1h', NULL, NULL);
+        FROM generate_series(0, 200) AS i
         """
     )
 
