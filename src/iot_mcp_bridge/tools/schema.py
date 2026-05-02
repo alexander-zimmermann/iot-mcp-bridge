@@ -140,9 +140,7 @@ async def get_schema(table: str, jsonb_sample_size: int = 1000) -> dict[str, Any
 
     schema_name = match["schema"]
     async with connection() as conn:
-        columns = await (
-            await conn.execute(_COLUMNS_SQL, (schema_name, table))
-        ).fetchall()
+        columns = await (await conn.execute(_COLUMNS_SQL, (schema_name, table))).fetchall()
 
     jsonb_columns = [c["column_name"] for c in columns if c["data_type"] == "jsonb"]
     jsonb_samples: dict[str, list[dict[str, Any]]] = {}
@@ -155,12 +153,8 @@ async def get_schema(table: str, jsonb_sample_size: int = 1000) -> dict[str, Any
                 time_col=sql.Identifier(time_col),
             )
             async with connection() as conn:
-                rows = await (
-                    await conn.execute(stmt, (jsonb_sample_size, 30))
-                ).fetchall()
-            jsonb_samples[col] = [
-                {"key": r["key"], "occurrences": r["occurrences"]} for r in rows
-            ]
+                rows = await (await conn.execute(stmt, (jsonb_sample_size, 30))).fetchall()
+            jsonb_samples[col] = [{"key": r["key"], "occurrences": r["occurrences"]} for r in rows]
 
     hint = None
     if table == "knx":

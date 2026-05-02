@@ -6,6 +6,8 @@ from typing import Any
 
 from fastmcp import FastMCP
 from starlette.applications import Starlette
+from starlette.middleware import Middleware
+from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Mount, Route
 
@@ -76,13 +78,22 @@ async def query_timeseries(
 _settings: Settings | None = None
 
 
-async def _healthz(_request: Any) -> JSONResponse:
+async def _healthz(_request: Request) -> JSONResponse:
     db_ok = await db.healthcheck()
     status = 200 if db_ok else 503
     return JSONResponse({"status": "ok" if db_ok else "degraded", "db": db_ok}, status_code=status)
 
 
+async def _oauth_protected_resource(_request: Request) -> JSONResponse:
+    if _settings is None:
+        return JSONResponse({"error": "not_ready"}, status_code=503)
+    return JSONResponse(auth_module.oauth_protected_resource_metadata(_settings))
+
+
 def build_app() -> Starlette:
+    global _settings
+    _settings = load_settings()
+
     # FastMCP's StreamableHTTPSessionManager runs as part of mcp_app.lifespan;
     # the parent Starlette app must include it or tool calls fail with
     # "Task group is not initialized".
@@ -90,8 +101,7 @@ def build_app() -> Starlette:
 
     @asynccontextmanager
     async def lifespan(app: Starlette) -> AsyncIterator[None]:
-        global _settings
-        _settings = load_settings()
+        assert _settings is not None
         configure_logging(_settings.log_level, _settings.log_format)
         auth_module.configure(_settings)
         await db.init_pool(_settings)
@@ -109,9 +119,15 @@ def build_app() -> Starlette:
 
     routes = [
         Route("/healthz", _healthz, methods=["GET"]),
+        Route(
+            "/.well-known/oauth-protected-resource",
+            _oauth_protected_resource,
+            methods=["GET"],
+        ),
         Mount("/", app=mcp_app),
     ]
-    return Starlette(routes=routes, lifespan=lifespan)
+    middleware = [Middleware(auth_module.AuthMiddleware, settings=_settings)]
+    return Starlette(routes=routes, middleware=middleware, lifespan=lifespan)
 
 
 app = build_app()

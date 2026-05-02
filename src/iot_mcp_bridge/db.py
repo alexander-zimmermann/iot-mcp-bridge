@@ -30,7 +30,7 @@ async def init_pool(settings: Settings) -> AsyncConnectionPool:
         "db_pool_ready",
         host=settings.db_host,
         database=settings.db_name,
-        user=settings.db_user,
+        user=settings.db_username,
         pool_min=settings.db_pool_min,
         pool_max=settings.db_pool_max,
     )
