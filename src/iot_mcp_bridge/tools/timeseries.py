@@ -142,8 +142,7 @@ async def query_timeseries(
         raise ValueError("settings is required")
     row_limit = settings.query_row_limit
     stmt = sql.SQL(
-        "SELECT {selects} FROM {tbl} WHERE {where} GROUP BY bucket "
-        "ORDER BY bucket LIMIT %s"
+        "SELECT {selects} FROM {tbl} WHERE {where} GROUP BY bucket ORDER BY bucket LIMIT %s"
     ).format(
         selects=sql.SQL(", ").join(select_parts),
         tbl=sql.Identifier(target_schema, target),

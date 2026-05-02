@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Literal
 
 from pydantic import Field, model_validator
@@ -17,8 +18,12 @@ class Settings(BaseSettings):
     db_host: str
     db_port: int = 5432
     db_name: str
-    db_user: str
-    db_password: str = Field(repr=False)
+    # In-cluster the credentials come from a mounted Secret via *_file paths;
+    # for tests/local dev the literal env vars still work.
+    db_username: str = ""
+    db_password: str = Field(default="", repr=False)
+    db_username_file: str | None = None
+    db_password_file: str | None = None
     db_pool_min: int = 2
     db_pool_max: int = 10
 
@@ -29,6 +34,19 @@ class Settings(BaseSettings):
     auth_issuer: str | None = None
     auth_audience: str | None = None
     auth_jwks_ttl_seconds: int = 3600
+    auth_resource_url: str | None = None
+
+    @model_validator(mode="after")
+    def _resolve_db_secret_files(self) -> Settings:
+        if self.db_username_file:
+            self.db_username = Path(self.db_username_file).read_text(encoding="utf-8").strip()
+        if self.db_password_file:
+            self.db_password = Path(self.db_password_file).read_text(encoding="utf-8").strip()
+        if not self.db_username:
+            raise ValueError("MCP_DB_USERNAME or MCP_DB_USERNAME_FILE is required")
+        if not self.db_password:
+            raise ValueError("MCP_DB_PASSWORD or MCP_DB_PASSWORD_FILE is required")
+        return self
 
     @model_validator(mode="after")
     def _check_auth_config(self) -> Settings:
@@ -43,15 +61,13 @@ class Settings(BaseSettings):
                 if not value
             ]
             if missing:
-                raise ValueError(
-                    f"MCP_AUTH_ENABLED=true requires {', '.join(missing)}"
-                )
+                raise ValueError(f"MCP_AUTH_ENABLED=true requires {', '.join(missing)}")
         return self
 
     @property
     def db_dsn(self) -> str:
         return (
-            f"postgresql://{self.db_user}:{self.db_password}"
+            f"postgresql://{self.db_username}:{self.db_password}"
             f"@{self.db_host}:{self.db_port}/{self.db_name}"
         )
 

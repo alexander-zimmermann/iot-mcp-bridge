@@ -134,7 +134,7 @@ def settings(timescaledb_container: PostgresContainer) -> Settings:
         MCP_DB_HOST=timescaledb_container.get_container_host_ip(),
         MCP_DB_PORT=str(timescaledb_container.get_exposed_port(5432)),
         MCP_DB_NAME="homelab",
-        MCP_DB_USER="test",
+        MCP_DB_USERNAME="test",
         MCP_DB_PASSWORD="test",
         MCP_AUTH_ENABLED="false",
     )
