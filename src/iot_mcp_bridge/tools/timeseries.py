@@ -6,6 +6,7 @@ from typing import Any, Literal
 
 from psycopg import sql
 
+from .. import metrics as metrics_module
 from ..config import Settings
 from ..db import connection
 from .schema import KIND_CONTINUOUS_AGGREGATE, get_schema, list_data_sources
@@ -150,8 +151,11 @@ async def query_timeseries(
     )
     params.append(row_limit + 1)
 
-    async with connection() as conn:
-        rows = await (await conn.execute(stmt, params)).fetchall()
+    m = metrics_module.get()
+    m.db_queries.labels(tool="query_timeseries", table_used=target).inc()
+    with m.db_query_duration.labels(tool="query_timeseries").time():
+        async with connection() as conn:
+            rows = await (await conn.execute(stmt, params)).fetchall()
 
     if len(rows) > row_limit:
         raise ValueError(

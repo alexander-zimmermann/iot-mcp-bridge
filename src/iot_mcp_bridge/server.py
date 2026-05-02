@@ -4,6 +4,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
 
+import structlog
 from fastmcp import FastMCP
 from starlette.applications import Starlette
 from starlette.middleware import Middleware
@@ -13,6 +14,7 @@ from starlette.routing import Mount, Route
 
 from . import auth as auth_module
 from . import db
+from . import metrics as metrics_module
 from .config import Settings, load_settings
 from .logging import configure_logging, get_logger
 from .tools import schema as schema_tools
@@ -22,6 +24,16 @@ log = get_logger(__name__)
 mcp: FastMCP = FastMCP("iot-mcp-bridge")
 
 
+def _principal_sub() -> str:
+    """Return the OIDC ``sub`` bound by AuthMiddleware, or ``anonymous``."""
+    sub = structlog.contextvars.get_contextvars().get("sub")
+    return str(sub) if sub else "anonymous"
+
+
+def _record_tool_call(tool: str, outcome: str) -> None:
+    metrics_module.get().tool_calls.labels(tool=tool, sub=_principal_sub(), outcome=outcome).inc()
+
+
 @mcp.tool()
 async def list_data_sources() -> list[dict[str, Any]]:
     """List hypertables and continuous aggregates with their time range.
@@ -29,7 +41,14 @@ async def list_data_sources() -> list[dict[str, Any]]:
     Use this first to discover what data is available before calling
     ``get_schema`` or ``query_timeseries``.
     """
-    return await schema_tools.list_data_sources()
+    log.info("tool_invoked", tool="list_data_sources")
+    try:
+        result = await schema_tools.list_data_sources()
+    except Exception:
+        _record_tool_call("list_data_sources", "error")
+        raise
+    _record_tool_call("list_data_sources", "ok")
+    return result
 
 
 @mcp.tool()
@@ -40,7 +59,14 @@ async def get_schema(table: str) -> dict[str, Any]:
     observed in the latest 1000 rows so the LLM can construct
     ``raw->>'<key>'`` expressions.
     """
-    return await schema_tools.get_schema(table)
+    log.info("tool_invoked", tool="get_schema", table=table)
+    try:
+        result = await schema_tools.get_schema(table)
+    except Exception:
+        _record_tool_call("get_schema", "error")
+        raise
+    _record_tool_call("get_schema", "ok")
+    return result
 
 
 @mcp.tool()
@@ -63,16 +89,29 @@ async def query_timeseries(
     - Result row count is capped (default 5000); exceed → error suggesting a
       coarser bucket.
     """
-    return await timeseries_tools.query_timeseries(
+    log.info(
+        "tool_invoked",
+        tool="query_timeseries",
         table=table,
-        columns=columns,
-        from_ts=from_ts,
-        to_ts=to_ts,
-        aggregation=aggregation,  # type: ignore[arg-type]
         bucket=bucket,
-        filters=filters,
-        settings=_settings,
+        aggregation=aggregation,
     )
+    try:
+        result = await timeseries_tools.query_timeseries(
+            table=table,
+            columns=columns,
+            from_ts=from_ts,
+            to_ts=to_ts,
+            aggregation=aggregation,  # type: ignore[arg-type]
+            bucket=bucket,
+            filters=filters,
+            settings=_settings,
+        )
+    except Exception:
+        _record_tool_call("query_timeseries", "error")
+        raise
+    _record_tool_call("query_timeseries", "ok")
+    return result
 
 
 _settings: Settings | None = None
@@ -103,18 +142,23 @@ def build_app() -> Starlette:
     async def lifespan(app: Starlette) -> AsyncIterator[None]:
         assert _settings is not None
         configure_logging(_settings.log_level, _settings.log_format)
+        metrics_module.init()
         auth_module.configure(_settings)
         await db.init_pool(_settings)
+        metrics_server = await metrics_module.serve(metrics_module.get(), _settings.metrics_port)
         log.info(
             "iot_mcp_bridge_ready",
             host=_settings.host,
             port=_settings.port,
+            metrics_port=_settings.metrics_port,
             auth_enabled=_settings.auth_enabled,
         )
         try:
             async with mcp_app.lifespan(app):
                 yield
         finally:
+            metrics_server.close()
+            await metrics_server.wait_closed()
             await db.close_pool()
 
     routes = [

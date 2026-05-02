@@ -29,6 +29,8 @@ class Settings(BaseSettings):
 
     query_row_limit: int = 5000
 
+    metrics_port: int = 9090
+
     auth_enabled: bool = False
     auth_jwks_url: str | None = None
     auth_issuer: str | None = None
