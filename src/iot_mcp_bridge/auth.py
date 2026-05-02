@@ -21,6 +21,7 @@ import jwt
 import structlog
 from jwt import PyJWK, PyJWKSet
 
+from . import metrics as metrics_module
 from .config import Settings
 from .logging import get_logger
 
@@ -59,12 +60,17 @@ class JwksCache:
         self._loaded_at: float = 0.0
 
     async def _refresh(self) -> None:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(self._url)
-            resp.raise_for_status()
-            self._jwks = PyJWKSet.from_dict(resp.json())
-            self._loaded_at = time.time()
-            log.info("jwks_refreshed", url=self._url, key_count=len(self._jwks.keys))
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.get(self._url)
+                resp.raise_for_status()
+                self._jwks = PyJWKSet.from_dict(resp.json())
+                self._loaded_at = time.time()
+                log.info("jwks_refreshed", url=self._url, key_count=len(self._jwks.keys))
+                metrics_module.get().jwks_refresh.labels(result="ok").inc()
+        except Exception:
+            metrics_module.get().jwks_refresh.labels(result="error").inc()
+            raise
 
     async def get_signing_key(self, kid: str | None) -> PyJWK:
         if self._jwks is None or (time.time() - self._loaded_at) > self._ttl:

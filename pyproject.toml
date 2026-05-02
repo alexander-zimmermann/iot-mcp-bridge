@@ -1,6 +1,6 @@
 [project]
 name = "iot-mcp-bridge"
-version = "0.2.0"
+version = "0.3.0"
 description = "MCP server bridging homelab IoT data (KNX, EMS, WARP, SolarEdge) to Claude.ai via TimescaleDB"
 readme = "README.md"
 license = "GPL-2.0-or-later"
@@ -25,6 +25,7 @@ dependencies = [
     "pyjwt[crypto]>=2.12.1",
     "httpx>=0.28.1",
     "cachetools>=7.1.0",
+    "prometheus-client>=0.25.0",
 ]
 
 [project.optional-dependencies]

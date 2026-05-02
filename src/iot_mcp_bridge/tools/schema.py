@@ -4,6 +4,7 @@ from typing import Any
 
 from psycopg import sql
 
+from .. import metrics as metrics_module
 from ..db import connection
 
 KIND_HYPERTABLE = "hypertable"
@@ -88,43 +89,46 @@ async def list_data_sources() -> list[dict[str, Any]]:
     Each entry contains: ``schema``, ``name``, ``kind``, ``description``,
     ``time_column``, ``time_range`` (``min``/``max``).
     """
-    async with connection() as conn:
-        hyper = await (await conn.execute(_LIST_HYPERTABLES_SQL)).fetchall()
-        caggs = await (await conn.execute(_LIST_CAGGS_SQL)).fetchall()
+    m = metrics_module.get()
+    m.db_queries.labels(tool="list_data_sources", table_used="_metadata").inc()
+    with m.db_query_duration.labels(tool="list_data_sources").time():
+        async with connection() as conn:
+            hyper = await (await conn.execute(_LIST_HYPERTABLES_SQL)).fetchall()
+            caggs = await (await conn.execute(_LIST_CAGGS_SQL)).fetchall()
 
-    rows: list[dict[str, Any]] = []
-    for r in hyper:
-        rows.append({**r, "kind": KIND_HYPERTABLE})
-    for r in caggs:
-        rows.append({**r, "kind": KIND_CONTINUOUS_AGGREGATE})
+        rows: list[dict[str, Any]] = []
+        for r in hyper:
+            rows.append({**r, "kind": KIND_HYPERTABLE})
+        for r in caggs:
+            rows.append({**r, "kind": KIND_CONTINUOUS_AGGREGATE})
 
-    out: list[dict[str, Any]] = []
-    for r in rows:
-        time_col = await _detect_time_column(r["schema"], r["name"])
-        time_range: dict[str, Any] = {"min": None, "max": None}
-        if time_col:
-            stmt = _TIME_RANGE_SQL.format(
-                col=sql.Identifier(time_col),
-                tbl=sql.Identifier(r["schema"], r["name"]),
+        out: list[dict[str, Any]] = []
+        for r in rows:
+            time_col = await _detect_time_column(r["schema"], r["name"])
+            time_range: dict[str, Any] = {"min": None, "max": None}
+            if time_col:
+                stmt = _TIME_RANGE_SQL.format(
+                    col=sql.Identifier(time_col),
+                    tbl=sql.Identifier(r["schema"], r["name"]),
+                )
+                async with connection() as conn:
+                    tr = await (await conn.execute(stmt)).fetchone()
+                    if tr:
+                        time_range = {
+                            "min": tr["min_ts"].isoformat() if tr["min_ts"] else None,
+                            "max": tr["max_ts"].isoformat() if tr["max_ts"] else None,
+                        }
+            out.append(
+                {
+                    "name": r["name"],
+                    "schema": r["schema"],
+                    "kind": r["kind"],
+                    "description": r["description"],
+                    "time_column": time_col,
+                    "time_range": time_range,
+                }
             )
-            async with connection() as conn:
-                tr = await (await conn.execute(stmt)).fetchone()
-                if tr:
-                    time_range = {
-                        "min": tr["min_ts"].isoformat() if tr["min_ts"] else None,
-                        "max": tr["max_ts"].isoformat() if tr["max_ts"] else None,
-                    }
-        out.append(
-            {
-                "name": r["name"],
-                "schema": r["schema"],
-                "kind": r["kind"],
-                "description": r["description"],
-                "time_column": time_col,
-                "time_range": time_range,
-            }
-        )
-    return out
+        return out
 
 
 async def get_schema(table: str, jsonb_sample_size: int = 1000) -> dict[str, Any]:
@@ -139,22 +143,27 @@ async def get_schema(table: str, jsonb_sample_size: int = 1000) -> dict[str, Any
         raise ValueError(f"unknown_table: {table}")
 
     schema_name = match["schema"]
-    async with connection() as conn:
-        columns = await (await conn.execute(_COLUMNS_SQL, (schema_name, table))).fetchall()
+    m = metrics_module.get()
+    m.db_queries.labels(tool="get_schema", table_used=table).inc()
+    with m.db_query_duration.labels(tool="get_schema").time():
+        async with connection() as conn:
+            columns = await (await conn.execute(_COLUMNS_SQL, (schema_name, table))).fetchall()
 
-    jsonb_columns = [c["column_name"] for c in columns if c["data_type"] == "jsonb"]
-    jsonb_samples: dict[str, list[dict[str, Any]]] = {}
-    time_col = match["time_column"]
-    if time_col:
-        for col in jsonb_columns:
-            stmt = _JSONB_KEYS_SQL.format(
-                col=sql.Identifier(col),
-                tbl=sql.Identifier(schema_name, table),
-                time_col=sql.Identifier(time_col),
-            )
-            async with connection() as conn:
-                rows = await (await conn.execute(stmt, (jsonb_sample_size, 30))).fetchall()
-            jsonb_samples[col] = [{"key": r["key"], "occurrences": r["occurrences"]} for r in rows]
+        jsonb_columns = [c["column_name"] for c in columns if c["data_type"] == "jsonb"]
+        jsonb_samples: dict[str, list[dict[str, Any]]] = {}
+        time_col = match["time_column"]
+        if time_col:
+            for col in jsonb_columns:
+                stmt = _JSONB_KEYS_SQL.format(
+                    col=sql.Identifier(col),
+                    tbl=sql.Identifier(schema_name, table),
+                    time_col=sql.Identifier(time_col),
+                )
+                async with connection() as conn:
+                    rows = await (await conn.execute(stmt, (jsonb_sample_size, 30))).fetchall()
+                jsonb_samples[col] = [
+                    {"key": r["key"], "occurrences": r["occurrences"]} for r in rows
+                ]
 
     hint = None
     if table == "knx":
