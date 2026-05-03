@@ -16,7 +16,7 @@ from . import auth as auth_module
 from . import db
 from . import metrics as metrics_module
 from .config import Settings, load_settings
-from .logging import configure_logging, get_logger
+from .logging_setup import configure_logging, get_logger
 from .tools import schema as schema_tools
 from .tools import timeseries as timeseries_tools
 
@@ -102,10 +102,10 @@ async def query_timeseries(
             columns=columns,
             from_ts=from_ts,
             to_ts=to_ts,
+            settings=_require_settings(),
             aggregation=aggregation,  # type: ignore[arg-type]
             bucket=bucket,
             filters=filters,
-            settings=_settings,
         )
     except Exception:
         _record_tool_call("query_timeseries", "error")
@@ -115,6 +115,13 @@ async def query_timeseries(
 
 
 _settings: Settings | None = None
+
+
+def _require_settings() -> Settings:
+    """Return the module-level settings, raising if the app hasn't been built yet."""
+    if _settings is None:
+        raise RuntimeError("settings not initialised — build_app() must run first")
+    return _settings
 
 
 async def _healthz(_request: Request) -> JSONResponse:

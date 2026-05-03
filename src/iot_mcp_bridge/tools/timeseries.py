@@ -94,10 +94,10 @@ async def query_timeseries(
     columns: list[str],
     from_ts: str | datetime,
     to_ts: str | datetime,
+    settings: Settings,
     aggregation: Aggregation = "avg",
     bucket: str = "1 hour",
     filters: dict[str, Any] | None = None,
-    settings: Settings | None = None,
 ) -> dict[str, Any]:
     """Bucketed aggregate query against a hypertable or continuous aggregate.
 
@@ -139,8 +139,6 @@ async def query_timeseries(
         where_parts.append(sql.SQL("{col} = %s").format(col=sql.Identifier(k)))
         params.append(v)
 
-    if settings is None:
-        raise ValueError("settings is required")
     row_limit = settings.query_row_limit
     stmt = sql.SQL(
         "SELECT {selects} FROM {tbl} WHERE {where} GROUP BY bucket ORDER BY bucket LIMIT %s"

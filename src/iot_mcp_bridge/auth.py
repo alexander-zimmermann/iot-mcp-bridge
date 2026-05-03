@@ -23,10 +23,10 @@ from jwt import PyJWK, PyJWKSet
 
 from . import metrics as metrics_module
 from .config import Settings
-from .logging import get_logger
+from .logging_setup import get_logger
 
 if TYPE_CHECKING:
-    from starlette.types import ASGIApp, Message, Receive, Scope, Send
+    from starlette.types import ASGIApp, Receive, Scope, Send
 
 log = get_logger(__name__)
 
@@ -271,8 +271,3 @@ class AuthMiddleware:
             await self.app(scope, receive, send)
         finally:
             structlog.contextvars.unbind_contextvars(*bound.keys())
-
-
-# Help mypy without forcing a runtime import — referenced only for typing above.
-if TYPE_CHECKING:
-    _ = Message
