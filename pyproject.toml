@@ -24,7 +24,7 @@ dependencies = [
     "structlog>=25.5.0",
     "pyjwt[crypto]>=2.12.1",
     "httpx>=0.28.1",
-    "cachetools>=7.1.0",
+    "cachetools>=7.1.1",
     "prometheus-client>=0.25.0",
 ]
 
