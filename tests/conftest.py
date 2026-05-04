@@ -150,14 +150,14 @@ def _seed(conn: psycopg.Connection) -> None:
     conn.execute(
         """
         INSERT INTO knx_catalog (ga, name, room, function, dpt, description) VALUES
-            ('1/2/0', 'Sensors.1F.Bedroom.Temperature',  'Bedroom',    'Sensors',     '9.001', NULL),
-            ('1/2/1', 'Sensors.1F.Bedroom.Humidity',     'Bedroom',    'Climate',     '9.007', NULL),
-            ('1/2/2', 'Lighting.1F.Bedroom.Ceiling',     'Bedroom',    'Lighting',    '1.001', NULL),
-            ('1/2/3', 'Sensors.GF.LivingRoom.Temperature','LivingRoom', 'Sensors',    '9.001', NULL),
-            ('1/2/4', 'Sensors.GF.LivingRoom.Humidity',  'LivingRoom', 'Climate',     '9.007', NULL),
-            ('1/2/100','Lighting.GF.LivingRoom.Ceiling', 'LivingRoom', 'Lighting',    '1.001', NULL),
-            ('1/2/200','Security.GF.LivingRoom.Motion',  'LivingRoom', 'MotionSensor','1.018', NULL),
-            ('1/2/300','General.Central.Presence',       NULL,         NULL,          '1.011', NULL)
+            ('1/2/0',  'Sensors.1F.Bedroom.Temperature',   'Bedroom',    'Sensors',  '9.001', NULL),
+            ('1/2/1',  'Sensors.1F.Bedroom.Humidity',      'Bedroom',    'Climate',  '9.007', NULL),
+            ('1/2/2',  'Lighting.1F.Bedroom.Ceiling',      'Bedroom',    'Lighting', '1.001', NULL),
+            ('1/2/3',  'Sensors.GF.LivingRoom.Temperature','LivingRoom', 'Sensors',  '9.001', NULL),
+            ('1/2/4',  'Sensors.GF.LivingRoom.Humidity',   'LivingRoom', 'Climate',  '9.007', NULL),
+            ('1/2/100','Lighting.GF.LivingRoom.Ceiling',   'LivingRoom', 'Lighting', '1.001', NULL),
+            ('1/2/200','Security.GF.LivingRoom.Motion',    'LivingRoom', 'Motion',   '1.018', NULL),
+            ('1/2/300','General.Central.Presence',         NULL,         NULL,       '1.011', NULL)
         """
     )
 

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -13,7 +13,7 @@ _FAR_FUTURE_END = "2099-12-31T00:00:00Z"
 
 
 def _now_window() -> tuple[str, str]:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     return (
         (now - timedelta(days=30)).isoformat(),
         (now + timedelta(hours=1)).isoformat(),
@@ -55,16 +55,15 @@ async def test_energy_flow_rejects_sub_hour_bucket(settings: Settings, db_pool: 
 
 async def test_heating_cycles_detects_runs(settings: Settings, db_pool: None) -> None:
     f, t = _now_window()
-    out = await domain_tools.query_heating_cycles(
-        f, t, settings=settings, min_duration_seconds=0
-    )
+    out = await domain_tools.query_heating_cycles(f, t, settings=settings, min_duration_seconds=0)
     # Seed pattern: every 3rd minute burns. Over 200 rows that's ~67 ON-states,
     # each typically a single-row cycle, but cycle merging may collapse them
     # depending on exact timing — at minimum we should see SOME cycles.
     assert out["cycle_count"] >= 30
     assert out["total_runtime_seconds"] >= 0
     cycle = out["cycles"][0]
-    assert {"start_ts", "end_ts", "duration_seconds", "peak_power_kw", "avg_power_kw"} <= cycle.keys()
+    expected = {"start_ts", "end_ts", "duration_seconds", "peak_power_kw", "avg_power_kw"}
+    assert expected <= cycle.keys()
 
 
 async def test_heating_cycles_min_duration_filter(settings: Settings, db_pool: None) -> None:
@@ -81,9 +80,7 @@ async def test_heating_cycles_rejects_negative_min_duration(
 ) -> None:
     f, t = _now_window()
     with pytest.raises(ValueError, match="invalid_min_duration_seconds"):
-        await domain_tools.query_heating_cycles(
-            f, t, settings=settings, min_duration_seconds=-5
-        )
+        await domain_tools.query_heating_cycles(f, t, settings=settings, min_duration_seconds=-5)
 
 
 # =====================================================================
@@ -93,9 +90,7 @@ async def test_heating_cycles_rejects_negative_min_duration(
 
 async def test_room_climate_happy_path(settings: Settings, db_pool: None) -> None:
     f, t = _now_window()
-    out = await domain_tools.query_room_climate(
-        "Bedroom", f, t, settings=settings, bucket="1 hour"
-    )
+    out = await domain_tools.query_room_climate("Bedroom", f, t, settings=settings, bucket="1 hour")
     assert out["row_count"] > 0
     assert out["room"] == "Bedroom"
     sample = out["rows"][0]
@@ -119,14 +114,10 @@ async def test_room_climate_function_filter(settings: Settings, db_pool: None) -
     assert all("Lighting" not in n for n in ga_names)
 
 
-async def test_room_climate_unknown_room_lists_valid(
-    settings: Settings, db_pool: None
-) -> None:
+async def test_room_climate_unknown_room_lists_valid(settings: Settings, db_pool: None) -> None:
     f, t = _now_window()
     with pytest.raises(ValueError) as exc_info:
-        await domain_tools.query_room_climate(
-            "Attic", f, t, settings=settings, bucket="1 hour"
-        )
+        await domain_tools.query_room_climate("Attic", f, t, settings=settings, bucket="1 hour")
     msg = str(exc_info.value)
     assert "unknown_room" in msg
     # Error includes the valid choices so the LLM can self-correct.
@@ -157,9 +148,7 @@ async def test_knx_events_happy_path(settings: Settings, db_pool: None) -> None:
 
 async def test_knx_events_room_filter(settings: Settings, db_pool: None) -> None:
     f, t = _now_window()
-    out = await domain_tools.query_knx_events(
-        f, t, settings=settings, room="Bedroom", limit=500
-    )
+    out = await domain_tools.query_knx_events(f, t, settings=settings, room="Bedroom", limit=500)
     assert all(r["room"] == "Bedroom" for r in out["rows"])
 
 
@@ -183,9 +172,7 @@ async def test_knx_events_rejects_zero_limit(settings: Settings, db_pool: None) 
 # =====================================================================
 
 
-async def test_correlate_events_finds_pv_wallbox_lag(
-    settings: Settings, db_pool: None
-) -> None:
+async def test_correlate_events_finds_pv_wallbox_lag(settings: Settings, db_pool: None) -> None:
     f, t = _now_window()
     out = await domain_tools.correlate_events(
         # Bucket >= 1h auto-routes to *_1h CAGGs, so use CAGG-side column names.

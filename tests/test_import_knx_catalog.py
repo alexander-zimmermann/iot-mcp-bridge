@@ -64,8 +64,7 @@ def test_to_rows_extracts_optional_metadata() -> None:
     }
     rows = _to_rows(catalog)
     assert rows == [
-        ("0/1/40", "Lighting.1F.Bedroom.Ceiling", "Bedroom", "Lighting",
-         "Ceiling light", "1.001"),
+        ("0/1/40", "Lighting.1F.Bedroom.Ceiling", "Bedroom", "Lighting", "Ceiling light", "1.001"),
         ("0/2/0", "General.Scenes", None, None, None, "17.001"),
     ]
 

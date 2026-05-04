@@ -184,9 +184,8 @@ async def query_heating_cycles(
 # query_room_climate
 # =====================================================================
 
-_DISTINCT_ROOMS_SQL = (
-    "SELECT DISTINCT room FROM knx_catalog WHERE room IS NOT NULL ORDER BY room"
-)
+_DISTINCT_ROOMS_SQL = "SELECT DISTINCT room FROM knx_catalog WHERE room IS NOT NULL ORDER BY room"
+
 
 async def _known_rooms() -> list[str]:
     async with connection() as conn:
@@ -400,12 +399,18 @@ async def correlate_events(
         col_b=sql.Identifier(column_b),
         tbl_b=sql.Identifier(schema_b, target_b),
     )
+    top_n = min(10, settings.query_row_limit)
     params = (
-        bucket, from_ts, to_ts,
-        bucket, from_ts, to_ts,
-        n_lags, n_lags,
         bucket,
-        10,
+        from_ts,
+        to_ts,
+        bucket,
+        from_ts,
+        to_ts,
+        n_lags,
+        n_lags,
+        bucket,
+        top_n,
     )
 
     m = metrics_module.get()
