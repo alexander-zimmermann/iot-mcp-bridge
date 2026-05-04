@@ -17,6 +17,7 @@ from . import db
 from . import metrics as metrics_module
 from .config import Settings, load_settings
 from .logging_setup import configure_logging, get_logger
+from .tools import domain as domain_tools
 from .tools import schema as schema_tools
 from .tools import timeseries as timeseries_tools
 
@@ -111,6 +112,160 @@ async def query_timeseries(
         _record_tool_call("query_timeseries", "error")
         raise
     _record_tool_call("query_timeseries", "ok")
+    return result
+
+
+@mcp.tool()
+async def query_energy_flow(
+    from_ts: str,
+    to_ts: str,
+    bucket: str = "1 hour",
+) -> dict[str, Any]:
+    """Joined PV / grid / consumer / battery / wallbox flow per bucket.
+
+    Pulls from the hourly continuous aggregates ``solaredge_powerflow_1h`` and
+    ``warp_meter_1h``. Bucket must be ``1 hour`` or coarser.
+    """
+    log.info("tool_invoked", tool="query_energy_flow", bucket=bucket)
+    try:
+        result = await domain_tools.query_energy_flow(
+            from_ts=from_ts, to_ts=to_ts, settings=_require_settings(), bucket=bucket
+        )
+    except Exception:
+        _record_tool_call("query_energy_flow", "error")
+        raise
+    _record_tool_call("query_energy_flow", "ok")
+    return result
+
+
+@mcp.tool()
+async def query_heating_cycles(
+    from_ts: str,
+    to_ts: str,
+    min_duration_seconds: int = 60,
+) -> dict[str, Any]:
+    """Detect ON/OFF burner cycles from boiler telemetry.
+
+    A cycle is a contiguous run with ``curburnpow > 0`` over ``ems_esp``
+    rows (``topic = 'boiler_data'``). Returns one row per cycle with start,
+    end, duration, peak and average burner power.
+    """
+    log.info("tool_invoked", tool="query_heating_cycles")
+    try:
+        result = await domain_tools.query_heating_cycles(
+            from_ts=from_ts,
+            to_ts=to_ts,
+            settings=_require_settings(),
+            min_duration_seconds=min_duration_seconds,
+        )
+    except Exception:
+        _record_tool_call("query_heating_cycles", "error")
+        raise
+    _record_tool_call("query_heating_cycles", "ok")
+    return result
+
+
+@mcp.tool()
+async def query_room_climate(
+    room: str,
+    from_ts: str,
+    to_ts: str,
+    bucket: str = "1 hour",
+    functions: list[str] | None = None,
+) -> dict[str, Any]:
+    """Bucketed average reading per GA name within a room.
+
+    ``room`` is validated against the distinct rooms in ``knx_catalog`` so
+    unknown rooms produce a precise error the LLM can self-correct against.
+    Optional ``functions`` narrows the result to GAs whose ETS function name
+    is in the given list.
+    """
+    log.info("tool_invoked", tool="query_room_climate", room=room, bucket=bucket)
+    try:
+        result = await domain_tools.query_room_climate(
+            room=room,
+            from_ts=from_ts,
+            to_ts=to_ts,
+            settings=_require_settings(),
+            bucket=bucket,
+            functions=functions,
+        )
+    except Exception:
+        _record_tool_call("query_room_climate", "error")
+        raise
+    _record_tool_call("query_room_climate", "ok")
+    return result
+
+
+@mcp.tool()
+async def query_knx_events(
+    from_ts: str,
+    to_ts: str,
+    room: str | None = None,
+    ga: str | None = None,
+    name: str | None = None,
+    limit: int = 200,
+) -> dict[str, Any]:
+    """Raw KNX event log; supports room/ga/name predicates."""
+    log.info(
+        "tool_invoked",
+        tool="query_knx_events",
+        room=room,
+        ga=ga,
+        name=name,
+        limit=limit,
+    )
+    try:
+        result = await domain_tools.query_knx_events(
+            from_ts=from_ts,
+            to_ts=to_ts,
+            settings=_require_settings(),
+            room=room,
+            ga=ga,
+            name=name,
+            limit=limit,
+        )
+    except Exception:
+        _record_tool_call("query_knx_events", "error")
+        raise
+    _record_tool_call("query_knx_events", "ok")
+    return result
+
+
+@mcp.tool()
+async def correlate_events(
+    source_a: dict[str, Any],
+    source_b: dict[str, Any],
+    from_ts: str,
+    to_ts: str,
+    window: str = "15 minutes",
+    bucket: str = "1 minute",
+) -> dict[str, Any]:
+    """Lagged Pearson correlation between two time-series streams.
+
+    Each ``source`` is ``{"table": str, "column": str}``. Returns ``best`` and
+    ``top`` (up to 10) lags by ``|corr|``.
+    """
+    log.info(
+        "tool_invoked",
+        tool="correlate_events",
+        bucket=bucket,
+        window=window,
+    )
+    try:
+        result = await domain_tools.correlate_events(
+            source_a=source_a,
+            source_b=source_b,
+            from_ts=from_ts,
+            to_ts=to_ts,
+            settings=_require_settings(),
+            window=window,
+            bucket=bucket,
+        )
+    except Exception:
+        _record_tool_call("correlate_events", "error")
+        raise
+    _record_tool_call("correlate_events", "ok")
     return result
 
 
