@@ -18,7 +18,11 @@ Modern homes generate a lot of telemetry — KNX writes, smart-meter readings, h
 
 ## What it gives you
 
-In Phase 0 (foundation), the server exposes three tools:
+The server exposes two layers of tools — generic ones that work against any
+TimescaleDB schema, and domain-specific ones that hide the table layout
+behind high-level questions:
+
+**Generic**
 
 | Tool                                                                             | What it does                                                                                                                                                                            |
 | -------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -26,7 +30,18 @@ In Phase 0 (foundation), the server exposes three tools:
 | `get_schema(table)`                                                              | Returns columns, types, and — for tables with a `JSONB` payload column — a sample of the most common JSON keys, so the LLM can construct sensible expressions like `raw->>'flow_temp'`. |
 | `query_timeseries(table, columns, from_ts, to_ts, aggregation, bucket, filters)` | Bucketed aggregate query (`avg`, `sum`, `min`, `max`, `count`). Automatically uses a `*_1h` continuous aggregate when the bucket is one hour or coarser and an aggregate exists.        |
 
-Later phases (tracked separately) add domain tools, anomaly detection, live state via NATS, optimization advisors, and approval-gated control. Each phase is fully optional — you can run Phase 0 forever and still get a useful "ask the house" experience.
+**Domain**
+
+| Tool                                                  | What it does                                                                                                                                                                          |
+| ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `query_energy_flow(from_ts, to_ts, bucket)`           | One row per bucket joining PV production, grid, household consumer, battery net, and wallbox power. Reads the hourly continuous aggregates; bucket must be `1 hour` or coarser.       |
+| `query_heating_cycles(from_ts, to_ts, …)`             | Detects ON/OFF burner cycles from `ems_esp` (`topic = 'boiler_data'`) via `LAG` window functions. Returns one row per cycle with start, end, duration, peak and average burner power. |
+| `query_room_climate(room, from_ts, to_ts, bucket)`    | Bucketed temp/humidity/etc. per GA name within a room. `room` is whitelisted against the imported KNX catalog so unknown rooms produce a precise error the LLM can self-correct.      |
+| `query_knx_events(from_ts, to_ts, room, ga, name, …)` | Raw event log against the `knx_catalog_view` view; supports room/ga/name predicates with a default limit of 200.                                                                      |
+| `correlate_events(source_a, source_b, …)`             | Lagged Pearson correlation between two time-series streams. Each `source` is `{table, column}`; returns the best lag plus the top 10 by `\|corr\|`.                                   |
+
+Later phases (tracked separately) add anomaly detection, live state via NATS,
+optimization advisors, and approval-gated control.
 
 ## Standalone usage
 
@@ -100,9 +115,23 @@ docker run --rm -p 8080:8080 \
   ghcr.io/alexander-zimmermann/iot-mcp-bridge:latest
 ```
 
-## Project status
+## KNX catalog
 
-Phase 0a (foundation) — in development. Tracked as [homelab#749](https://github.com/alexander-zimmermann/homelab/issues/749). Subsequent phases are listed at the top of the [homelab repository's iot-mcp-bridge issue label](https://github.com/alexander-zimmermann/homelab/labels/iot-mcp-bridge).
+The domain tools (`query_room_climate`, `query_knx_events`) need a Postgres
+`knx_catalog` table that maps each KNX group address to a name, room,
+function, and description. The catalog is generated from the ETS `.knxproj`
+file by `knx-nats-bridge`, distributed as a ConfigMap, and imported into
+Postgres by the bundled `iot-mcp-bridge-import-knx-catalog` CLI:
+
+```bash
+uv run python -m iot_mcp_bridge.cli.import_knx_catalog \
+    --catalog-path /etc/iot-mcp-bridge/knx-catalog.yaml
+```
+
+The CLI uses `MCP_DB_*` env vars for the connection (admin role required —
+the read-only role used by the server cannot write) and is idempotent:
+re-runs only update rows whose fields actually changed and purge rows whose
+GA is no longer in the YAML.
 
 ## Development
 

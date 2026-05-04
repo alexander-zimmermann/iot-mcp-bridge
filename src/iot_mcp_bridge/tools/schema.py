@@ -168,8 +168,9 @@ async def get_schema(table: str, jsonb_sample_size: int = 1000) -> dict[str, Any
     hint = None
     if table == "knx":
         hint = (
-            "GA→name mapping lives in ConfigMap knx-nats-bridge-mapping in namespace "
-            "knx-nats-bridge — surfaced as a Postgres view in Phase 1."
+            "Prefer querying knx_catalog_view (knx joined with knx_catalog) — it "
+            "exposes ga_name, room, function, description per row, so queries can "
+            "filter or group by room/function without round-tripping the catalog."
         )
 
     return {
