@@ -1,6 +1,6 @@
 [project]
 name = "iot-mcp-bridge"
-version = "0.5.0"
+version = "0.5.1"
 description = "MCP server bridging homelab IoT data (KNX, EMS, WARP, SolarEdge) to Claude.ai via TimescaleDB"
 readme = "README.md"
 license = "GPL-2.0-or-later"
@@ -82,6 +82,24 @@ disable_error_code = ["call-overload", "attr-defined", "index", "dict-item", "as
 [[tool.mypy.overrides]]
 module = ["fastmcp", "fastmcp.*", "testcontainers.*"]
 ignore_missing_imports = true
+
+# Pylance/Pyright counterparts to the mypy overrides above — quiet the
+# psycopg `dict_row` and stub-gap warnings the CI gate (mypy) already
+# disables.
+[tool.pyright]
+include = ["src", "tests"]
+venvPath = "."
+venv = ".venv"
+reportUnknownMemberType = "none"
+reportUnknownArgumentType = "none"
+reportUnknownVariableType = "none"
+reportAttributeAccessIssue = "none"
+reportUnnecessaryIsInstance = "none"
+reportUnnecessaryComparison = "none"
+
+[[tool.pyright.executionEnvironments]]
+root = "tests"
+reportPrivateUsage = "none"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

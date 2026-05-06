@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from datetime import datetime
-from typing import Any, Literal
+from typing import Any, Literal, LiteralString
 
 from psycopg import sql
 
@@ -12,7 +12,7 @@ from ..db import connection
 from .schema import KIND_CONTINUOUS_AGGREGATE, get_schema, list_data_sources
 
 Aggregation = Literal["avg", "sum", "min", "max", "count"]
-_AGG_FUNCS: dict[str, str] = {
+_AGG_FUNCS: dict[Aggregation, LiteralString] = {
     "avg": "AVG",
     "sum": "SUM",
     "min": "MIN",
