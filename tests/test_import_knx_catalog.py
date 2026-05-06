@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
 from pathlib import Path
 
 import psycopg
@@ -18,7 +19,7 @@ def importer_dsn(timescaledb_container: PostgresContainer) -> str:
 
 
 @pytest.fixture(autouse=True)
-def _reset_catalog(importer_dsn: str) -> None:
+def _reset_catalog(importer_dsn: str) -> Iterator[None]:
     """Truncate knx_catalog before each importer test, restore the seed after."""
     seed_rows = [
         ("1/2/0", "Sensors.1F.Bedroom.Temperature", "Bedroom", "Sensors", None, "9.001"),
