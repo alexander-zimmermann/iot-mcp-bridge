@@ -1,3 +1,3 @@
 """iot-mcp-bridge — read-only MCP server over TimescaleDB."""
 
-__version__ = "0.5.1"
+__version__ = "0.5.2"
