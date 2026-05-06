@@ -204,15 +204,29 @@ async def query_knx_events(
     room: str | None = None,
     ga: str | None = None,
     name: str | None = None,
+    functions: list[str] | None = None,
     limit: int = 200,
 ) -> dict[str, Any]:
-    """Raw KNX event log; supports room/ga/name predicates."""
+    """Raw KNX event log against ``knx_catalog_view``.
+
+    All predicates AND-combined; pass none for an unfiltered window.
+
+    * ``room``      — exact match (e.g. ``"Wohnzimmer"``)
+    * ``ga``        — exact GA match (``"4/2/161"``)
+    * ``name``      — substring match against ``ga_name`` (``ILIKE``);
+                      pass partial words like ``"Beleuchtung"``
+    * ``functions`` — list of ETS function names; combine with ``room``
+                      to narrow to e.g. all lighting events in a room
+
+    Default ``limit`` 200; effective cap ``min(limit, query_row_limit)``.
+    """
     log.info(
         "tool_invoked",
         tool="query_knx_events",
         room=room,
         ga=ga,
         name=name,
+        functions=functions,
         limit=limit,
     )
     try:
@@ -223,6 +237,7 @@ async def query_knx_events(
             room=room,
             ga=ga,
             name=name,
+            functions=functions,
             limit=limit,
         )
     except Exception:

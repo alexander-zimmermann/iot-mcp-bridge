@@ -152,6 +152,14 @@ async def test_knx_events_room_filter(settings: Settings, db_pool: None) -> None
     assert all(r["room"] == "Bedroom" for r in out["rows"])
 
 
+async def test_knx_events_functions_filter(settings: Settings, db_pool: None) -> None:
+    f, t = _now_window()
+    out = await domain_tools.query_knx_events(
+        f, t, settings=settings, functions=["Sensors"], limit=500
+    )
+    assert all(r["function"] == "Sensors" for r in out["rows"])
+
+
 async def test_knx_events_name_filter(settings: Settings, db_pool: None) -> None:
     f, t = _now_window()
     out = await domain_tools.query_knx_events(

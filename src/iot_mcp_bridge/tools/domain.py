@@ -273,12 +273,23 @@ async def query_knx_events(
     room: str | None = None,
     ga: str | None = None,
     name: str | None = None,
+    functions: list[str] | None = None,
     limit: int = 200,
 ) -> dict[str, Any]:
-    """Raw event log against ``knx_catalog_view``; supports room/ga/name predicates.
+    """Raw event log against ``knx_catalog_view``.
 
-    Default ``limit`` is 200 (typical "what happened recently" window). The
-    effective cap is ``min(limit, settings.query_row_limit)``.
+    Predicates (all optional, AND-combined):
+
+    * ``room``      — exact match against ``knx_catalog.room``
+    * ``ga``        — exact GA match (``"4/2/161"``)
+    * ``name``      — substring match against ``ga_name`` via ``ILIKE``;
+                      pass partial words like ``"Beleuchtung"``
+    * ``functions`` — list of ETS function names to include (e.g.
+                      ``["Beleuchtung", "Schalten"]``); validated against
+                      the catalog so invalid names produce a precise error
+
+    Default ``limit`` is 200 (typical "what happened recently" window).
+    Effective cap is ``min(limit, settings.query_row_limit)``.
     """
     if limit <= 0:
         raise ValueError(f"invalid_limit: {limit}")
@@ -295,6 +306,9 @@ async def query_knx_events(
     if name is not None:
         where_parts.append(sql.SQL("ga_name ILIKE %s"))
         params.append(f"%{name}%")
+    if functions:
+        where_parts.append(sql.SQL("function = ANY(%s)"))
+        params.append(list(functions))
     params.append(effective_limit + 1)
 
     stmt = sql.SQL(
@@ -317,7 +331,7 @@ async def query_knx_events(
     return {
         "from_ts": str(from_ts),
         "to_ts": str(to_ts),
-        "filters": {"room": room, "ga": ga, "name": name},
+        "filters": {"room": room, "ga": ga, "name": name, "functions": functions},
         "limit": effective_limit,
         "row_count": len(rows),
         "rows": [_serialize_row(r) for r in rows],
