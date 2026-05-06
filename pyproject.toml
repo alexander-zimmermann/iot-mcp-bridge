@@ -37,7 +37,7 @@ dev = [
     "respx>=0.23.1",
     "ruff>=0.15.12",
     "mypy>=2.0.0",
-    "types-PyYAML>=6.0.12",
+    "types-PyYAML>=6.0.12.20260408",
     "pre-commit>=4.6.0",
 ]
 
