@@ -17,7 +17,7 @@ import argparse
 import logging
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import psycopg
 import yaml
@@ -46,29 +46,32 @@ WHERE
 """
 
 
-def _read_catalog(path: Path) -> dict[str, dict[str, Any]]:
-    raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+def _read_catalog(path: Path) -> dict[str, Any]:
+    raw: object = yaml.safe_load(path.read_text(encoding="utf-8"))
+    if raw is None:
+        return {}
     if not isinstance(raw, dict):
         raise ValueError(f"{path}: expected mapping at top level, got {type(raw).__name__}")
-    return raw
+    return cast("dict[str, Any]", raw)
 
 
-def _to_rows(catalog: dict[str, dict[str, Any]]) -> list[tuple[Any, ...]]:
+def _to_rows(catalog: dict[str, Any]) -> list[tuple[Any, ...]]:
     rows: list[tuple[Any, ...]] = []
     for ga, entry in catalog.items():
         if not isinstance(entry, dict):
             raise ValueError(f"entry for {ga!r} must be a mapping")
-        name = entry.get("name")
-        dpt = entry.get("dpt")
+        e = cast("dict[str, Any]", entry)
+        name = e.get("name")
+        dpt = e.get("dpt")
         if not isinstance(name, str) or not isinstance(dpt, str):
             raise ValueError(f"entry for {ga!r} requires string 'name' and 'dpt'")
         rows.append(
             (
                 ga,
                 name,
-                entry.get("room"),
-                entry.get("function"),
-                entry.get("description"),
+                e.get("room"),
+                e.get("function"),
+                e.get("description"),
                 dpt,
             )
         )
@@ -93,7 +96,7 @@ def run(catalog_path: Path, dsn: str) -> int:
         "imported %d entries from %s; deleted %d stale row(s)",
         len(rows),
         catalog_path,
-        deleted if deleted is not None else 0,
+        max(deleted, 0),
     )
     return len(rows)
 

@@ -37,6 +37,7 @@ dev = [
     "respx>=0.23.1",
     "ruff>=0.15.12",
     "mypy>=1.20.2",
+    "types-PyYAML>=6.0.12",
     "pre-commit>=4.6.0",
 ]
 
@@ -70,11 +71,16 @@ warn_unused_ignores = true
 [[tool.mypy.overrides]]
 # psycopg's dict_row factory returns dicts at runtime but the stubs cannot
 # express that, so row["col"] reads are flagged. We rely on tests instead.
-module = ["iot_mcp_bridge.tools.schema", "iot_mcp_bridge.tools.timeseries"]
-disable_error_code = ["call-overload", "attr-defined", "index", "dict-item", "assignment"]
+module = [
+    "iot_mcp_bridge.tools.schema",
+    "iot_mcp_bridge.tools.timeseries",
+    "iot_mcp_bridge.tools.domain",
+    "iot_mcp_bridge.cli.import_knx_catalog",
+]
+disable_error_code = ["call-overload", "attr-defined", "index", "dict-item", "assignment", "arg-type"]
 
 [[tool.mypy.overrides]]
-module = ["fastmcp", "fastmcp.*"]
+module = ["fastmcp", "fastmcp.*", "testcontainers.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
