@@ -40,7 +40,7 @@ async def _publish_async(settings: Settings, subject: str, payload: dict[str, An
     try:
         body = json.dumps(payload, default=str).encode("utf-8")
         await nc.publish(subject, body)
-        await nc.flush(timeout=5.0)
+        await nc.flush(timeout=5)
         log.info("nats_publish", subject=subject, bytes=len(body))
     finally:
         await nc.close()
