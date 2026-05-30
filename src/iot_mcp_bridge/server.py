@@ -248,6 +248,62 @@ async def query_knx_events(
 
 
 @mcp.tool()
+async def query_unifi_events(
+    from_ts: str,
+    to_ts: str,
+    camera: str | None = None,
+    detection_type: str | None = None,
+    event_type: str | None = None,
+    min_score: int | None = None,
+    event_id: str | None = None,
+    limit: int = 200,
+) -> dict[str, Any]:
+    """Recent UniFi Protect Alarm Manager events for security review.
+
+    All predicates AND-combined; pass none for an unfiltered window.
+
+    * ``camera``         — exact match (``"fassade"``, ``"eingang"``,
+                           ``"terrasse_wohnzimmer"``, ``"terrasse_esszimmer"``)
+    * ``detection_type`` — trigger ``key`` (e.g. ``"person"``, ``"motion"``,
+                           ``"line_crossed"``, ``"face_known"``, ``"vehicle"``,
+                           ``"license_plate_known"``, ``"audio_alarm_siren"``)
+    * ``event_type``     — UniFi source type (``"smartDetectZone"`` /
+                           ``"smartDetectLine"`` / ``"motion"``)
+    * ``min_score``      — confidence floor 0..100
+    * ``event_id``       — exact UUID; use to fetch details for one alarm
+
+    Default ``limit`` 200; effective cap ``min(limit, query_row_limit)``.
+    """
+    log.info(
+        "tool_invoked",
+        tool="query_unifi_events",
+        camera=camera,
+        detection_type=detection_type,
+        event_type=event_type,
+        min_score=min_score,
+        event_id=event_id,
+        limit=limit,
+    )
+    try:
+        result = await domain_tools.query_unifi_events(
+            from_ts=from_ts,
+            to_ts=to_ts,
+            settings=_require_settings(),
+            camera=camera,
+            detection_type=detection_type,
+            event_type=event_type,
+            min_score=min_score,
+            event_id=event_id,
+            limit=limit,
+        )
+    except Exception:
+        _record_tool_call("query_unifi_events", "error")
+        raise
+    _record_tool_call("query_unifi_events", "ok")
+    return result
+
+
+@mcp.tool()
 async def correlate_events(
     source_a: dict[str, Any],
     source_b: dict[str, Any],

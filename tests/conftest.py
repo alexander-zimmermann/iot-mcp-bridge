@@ -233,6 +233,44 @@ def _seed(conn: psycopg.Connection) -> None:
         """
     )
 
+    # unifi_events hypertable — Security-Archive of UniFi Protect Alarm Manager
+    # triggers. Columns mirror prod (see lares bootstrap.sql).
+    conn.execute(
+        """
+        CREATE TABLE unifi_events (
+            time           TIMESTAMPTZ NOT NULL,
+            camera         TEXT        NOT NULL,
+            detection_type TEXT        NOT NULL,
+            score          SMALLINT,
+            event_type     TEXT,
+            value          TEXT,
+            event_id       TEXT,
+            event_link     TEXT,
+            raw            JSONB
+        )
+        """
+    )
+    conn.execute("SELECT create_hypertable('unifi_events', by_range('time'))")
+
+    # Seed: mix cameras, detection_types, scores so filters can be exercised
+    # in isolation. 40 rows over the last 40 minutes.
+    conn.execute(
+        """
+        INSERT INTO unifi_events
+        SELECT
+            NOW() - (i || ' minutes')::interval,
+            (ARRAY['fassade','eingang','terrasse_wohnzimmer','terrasse_esszimmer'])[1 + (i % 4)],
+            (ARRAY['person','motion','vehicle','face_known'])[1 + (i % 4)],
+            ((i * 7) % 101)::smallint,
+            (ARRAY['smartDetectZone','smartDetectLine','motion','smartDetectZone'])[1 + (i % 4)],
+            CASE WHEN i % 4 = 3 THEN 'Alexander Zimmermann' ELSE NULL END,
+            'evt-' || i,
+            'https://192.168.1.1/protect/events/event/evt-' || i,
+            jsonb_build_object('seed', true, 'idx', i)
+        FROM generate_series(0, 39) AS i
+        """
+    )
+
 
 _CAGGS: list[tuple[str, str]] = [
     (
