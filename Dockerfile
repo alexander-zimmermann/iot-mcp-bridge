@@ -13,7 +13,7 @@ COPY src ./src
 
 RUN uv venv /opt/venv \
  && . /opt/venv/bin/activate \
- && uv pip install --no-cache .
+ && uv pip install --no-cache ".[jobs]"
 
 FROM python:3.14-slim
 
