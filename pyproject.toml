@@ -44,13 +44,13 @@ dev = [
 # separate extra so local dev (`uv sync`) can skip ~400 MB of scientific
 # libraries; the production Dockerfile installs them via `.[jobs]`.
 jobs = [
-    "scikit-learn>=1.7.2",
-    "statsforecast>=2.0.2",
-    "joblib>=1.5.2",
-    "boto3>=1.40.62",
-    "pandas>=2.3.3",
-    "numpy>=2.3.4",
-    "nats-py>=2.13.0",
+    "scikit-learn>=1.8.0",
+    "statsforecast>=2.0.3",
+    "joblib>=1.5.3",
+    "boto3>=1.43.18",
+    "pandas>=3.0.3",
+    "numpy>=2.4.6",
+    "nats-py>=2.14.0",
 ]
 
 [project.scripts]
