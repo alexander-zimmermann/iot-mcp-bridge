@@ -229,3 +229,87 @@ async def test_correlate_events_unknown_table(settings: Settings, db_pool: None)
             window="3 hours",
             bucket="1 hour",
         )
+
+
+# =====================================================================
+# query_unifi_events
+# =====================================================================
+
+
+async def test_unifi_events_returns_all_in_window(settings: Settings, db_pool: None) -> None:
+    f, t = _now_window()
+    out = await domain_tools.query_unifi_events(f, t, settings=settings)
+    assert out["row_count"] == 40
+    sample = out["rows"][0]
+    expected = {
+        "time",
+        "camera",
+        "detection_type",
+        "score",
+        "event_type",
+        "value",
+        "event_id",
+        "event_link",
+    }
+    assert expected <= sample.keys()
+    # Rows are ordered most-recent first.
+    assert out["rows"][0]["time"] >= out["rows"][-1]["time"]
+
+
+async def test_unifi_events_filter_by_camera(settings: Settings, db_pool: None) -> None:
+    f, t = _now_window()
+    out = await domain_tools.query_unifi_events(f, t, settings=settings, camera="fassade")
+    assert out["row_count"] == 10  # 40 rows / 4 cameras
+    assert all(r["camera"] == "fassade" for r in out["rows"])
+
+
+async def test_unifi_events_filter_by_detection_type(settings: Settings, db_pool: None) -> None:
+    f, t = _now_window()
+    out = await domain_tools.query_unifi_events(f, t, settings=settings, detection_type="person")
+    assert out["row_count"] == 10
+    assert all(r["detection_type"] == "person" for r in out["rows"])
+
+
+async def test_unifi_events_min_score(settings: Settings, db_pool: None) -> None:
+    f, t = _now_window()
+    out = await domain_tools.query_unifi_events(f, t, settings=settings, min_score=80)
+    assert out["row_count"] > 0
+    assert all(r["score"] >= 80 for r in out["rows"])
+
+
+async def test_unifi_events_filter_by_event_id(settings: Settings, db_pool: None) -> None:
+    f, t = _now_window()
+    out = await domain_tools.query_unifi_events(f, t, settings=settings, event_id="evt-7")
+    assert out["row_count"] == 1
+    assert out["rows"][0]["event_id"] == "evt-7"
+
+
+async def test_unifi_events_face_value_populated_only_for_face_rows(
+    settings: Settings, db_pool: None
+) -> None:
+    f, t = _now_window()
+    out = await domain_tools.query_unifi_events(
+        f, t, settings=settings, detection_type="face_known"
+    )
+    assert out["row_count"] == 10
+    assert all(r["value"] == "Alexander Zimmermann" for r in out["rows"])
+
+
+async def test_unifi_events_empty_range(settings: Settings, db_pool: None) -> None:
+    out = await domain_tools.query_unifi_events(_FAR_FUTURE, _FAR_FUTURE_END, settings=settings)
+    assert out["row_count"] == 0
+    assert out["rows"] == []
+
+
+async def test_unifi_events_rejects_invalid_limit(settings: Settings, db_pool: None) -> None:
+    f, t = _now_window()
+    with pytest.raises(ValueError, match="invalid_limit"):
+        await domain_tools.query_unifi_events(f, t, settings=settings, limit=0)
+
+
+async def test_unifi_events_rejects_out_of_range_min_score(
+    settings: Settings, db_pool: None
+) -> None:
+    f, t = _now_window()
+    with pytest.raises(ValueError, match="invalid_min_score"):
+        await domain_tools.query_unifi_events(f, t, settings=settings, min_score=101)

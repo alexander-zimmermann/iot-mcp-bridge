@@ -339,6 +339,102 @@ async def query_knx_events(
 
 
 # =====================================================================
+# query_unifi_events
+# =====================================================================
+
+
+async def query_unifi_events(
+    from_ts: str | datetime,
+    to_ts: str | datetime,
+    settings: Settings,
+    camera: str | None = None,
+    detection_type: str | None = None,
+    event_type: str | None = None,
+    min_score: int | None = None,
+    event_id: str | None = None,
+    limit: int = 200,
+) -> dict[str, Any]:
+    """Recent UniFi Protect Alarm Manager events for security review.
+
+    Each row is one trigger published on ``unifi.events.<camera>.<detection_type>``
+    by node-RED and ingested into ``unifi_events`` by redpanda-connect.
+
+    Predicates (all optional, AND-combined):
+
+    * ``camera``         — exact camera name (e.g. ``"fassade"``, ``"eingang"``,
+                           ``"terrasse_wohnzimmer"``, ``"terrasse_esszimmer"``)
+    * ``detection_type`` — trigger ``key`` (e.g. ``"person"``, ``"motion"``,
+                           ``"face_known"``, ``"vehicle"``,
+                           ``"license_plate_known"``, ``"audio_alarm_siren"``)
+    * ``event_type``     — UniFi-internal source type
+                           (``"smartDetectZone"`` / ``"smartDetectLine"`` /
+                           ``"motion"``)
+    * ``min_score``      — confidence floor 0..100; UniFi smart-detect score
+                           lives in ``sourceEvent.score``
+    * ``event_id``       — exact UUID; use to look up details for one alarm
+
+    Default ``limit`` is 200; effective cap is
+    ``min(limit, settings.query_row_limit)``.
+    """
+    if limit <= 0:
+        raise ValueError(f"invalid_limit: {limit}")
+    if min_score is not None and not 0 <= min_score <= 100:
+        raise ValueError(f"invalid_min_score: {min_score}; must be 0..100")
+    effective_limit = min(limit, settings.query_row_limit)
+
+    where_parts: list[sql.Composable] = [sql.SQL("time BETWEEN %s AND %s")]
+    params: list[Any] = [from_ts, to_ts]
+    if camera is not None:
+        where_parts.append(sql.SQL("camera = %s"))
+        params.append(camera)
+    if detection_type is not None:
+        where_parts.append(sql.SQL("detection_type = %s"))
+        params.append(detection_type)
+    if event_type is not None:
+        where_parts.append(sql.SQL("event_type = %s"))
+        params.append(event_type)
+    if min_score is not None:
+        where_parts.append(sql.SQL("score >= %s"))
+        params.append(min_score)
+    if event_id is not None:
+        where_parts.append(sql.SQL("event_id = %s"))
+        params.append(event_id)
+    params.append(effective_limit + 1)
+
+    stmt = sql.SQL(
+        """
+        SELECT time, camera, detection_type, score, event_type, value, event_id, event_link
+        FROM unifi_events
+        WHERE {where}
+        ORDER BY time DESC
+        LIMIT %s
+        """
+    ).format(where=sql.SQL(" AND ").join(where_parts))
+
+    m = metrics_module.get()
+    m.db_queries.labels(tool="query_unifi_events", table_used="unifi_events").inc()
+    with m.db_query_duration.labels(tool="query_unifi_events").time():
+        async with connection() as conn:
+            rows = await (await conn.execute(stmt, params)).fetchall()
+
+    _check_row_limit(rows, effective_limit, "narrow by camera/detection_type or shorten time range")
+    return {
+        "from_ts": str(from_ts),
+        "to_ts": str(to_ts),
+        "filters": {
+            "camera": camera,
+            "detection_type": detection_type,
+            "event_type": event_type,
+            "min_score": min_score,
+            "event_id": event_id,
+        },
+        "limit": effective_limit,
+        "row_count": len(rows),
+        "rows": [_serialize_row(r) for r in rows],
+    }
+
+
+# =====================================================================
 # correlate_events
 # =====================================================================
 
