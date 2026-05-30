@@ -17,9 +17,7 @@ def _s3_client(settings: Settings) -> Any:
     if not settings.s3_endpoint:
         raise ValueError("MCP_S3_ENDPOINT is required for artifact load/save")
     if not settings.s3_access_key or not settings.s3_secret_key:
-        raise ValueError(
-            "MCP_S3_ACCESS_KEY / MCP_S3_SECRET_KEY (or *_FILE variants) are required"
-        )
+        raise ValueError("MCP_S3_ACCESS_KEY / MCP_S3_SECRET_KEY (or *_FILE variants) are required")
     return boto3.client(
         "s3",
         endpoint_url=settings.s3_endpoint,

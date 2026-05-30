@@ -94,17 +94,11 @@ class Settings(BaseSettings):
                 Path(self.db_write_password_file).read_text(encoding="utf-8").strip()
             )
         if self.nats_password_file:
-            self.nats_password = (
-                Path(self.nats_password_file).read_text(encoding="utf-8").strip()
-            )
+            self.nats_password = Path(self.nats_password_file).read_text(encoding="utf-8").strip()
         if self.s3_access_key_file:
-            self.s3_access_key = (
-                Path(self.s3_access_key_file).read_text(encoding="utf-8").strip()
-            )
+            self.s3_access_key = Path(self.s3_access_key_file).read_text(encoding="utf-8").strip()
         if self.s3_secret_key_file:
-            self.s3_secret_key = (
-                Path(self.s3_secret_key_file).read_text(encoding="utf-8").strip()
-            )
+            self.s3_secret_key = Path(self.s3_secret_key_file).read_text(encoding="utf-8").strip()
         return self
 
     @model_validator(mode="after")
