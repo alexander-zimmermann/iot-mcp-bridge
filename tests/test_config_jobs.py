@@ -56,6 +56,20 @@ def test_db_write_dsn_reads_file(base_env: None, tmp_path: Path) -> None:
     assert s.db_write_dsn == "postgresql://rw:rw-pw@localhost:5432/test"
 
 
+def test_db_dsns_url_encode_password(base_env: None) -> None:
+    # openssl rand -base64 routinely produces passwords containing '/', '+',
+    # '=', '@' — all of which break psycopg's URI parser when not encoded.
+    os.environ.update(
+        MCP_DB_USERNAME="ro",
+        MCP_DB_PASSWORD="abc/def+gh=ij@kl",
+        MCP_DB_WRITE_USERNAME="rw",
+        MCP_DB_WRITE_PASSWORD="x/y+z=q@r",
+    )
+    s = Settings()  # type: ignore[call-arg]
+    assert s.db_dsn == "postgresql://ro:abc%2Fdef%2Bgh%3Dij%40kl@localhost:5432/test"
+    assert s.db_write_dsn == "postgresql://rw:x%2Fy%2Bz%3Dq%40r@localhost:5432/test"
+
+
 def test_optional_fields_have_sane_defaults(base_env: None) -> None:
     s = Settings()  # type: ignore[call-arg]
     assert s.s3_bucket == "iot-mcp-bridge-models"
