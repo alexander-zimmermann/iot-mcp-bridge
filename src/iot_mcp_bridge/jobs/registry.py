@@ -13,11 +13,20 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class UnivariateMetric:
-    """A single (CAGG, column) pair scored by robust z-score detector."""
+    """A single (CAGG, column) pair scored by z-score against the matching
+    `<source>_baseline_30d` hour×weekday profile.
+
+    `group_cols` carries the extra columns the source-CAGG groups by beyond
+    `bucket` (e.g. `inverter_id` for solaredge, `ga` for knx). The detector
+    joins per group on both sides and emits one anomaly row per group.
+    """
 
     uc: str
     source_cagg: str
+    baseline_cagg: str
     metric: str
+    stats_field: str
+    group_cols: tuple[str, ...] = ()
     severity_floor: str = "info"
     warmup_days: int = 7
     silenced: bool = False
@@ -51,8 +60,114 @@ class SeasonalModel:
     silenced: bool = False
 
 
-# Populated by the detector implementations when each lands.
-UNIVARIATE_METRICS: tuple[UnivariateMetric, ...] = ()
+UNIVARIATE_METRICS: tuple[UnivariateMetric, ...] = (
+    # Heating boiler — `ems_esp_boiler_1h` × `ems_esp_boiler_baseline_30d`.
+    UnivariateMetric(
+        uc="boiler_curburnpow",
+        source_cagg="ems_esp_boiler_1h",
+        baseline_cagg="ems_esp_boiler_baseline_30d",
+        metric="curburnpow_avg",
+        stats_field="curburnpow_stats",
+    ),
+    UnivariateMetric(
+        uc="boiler_curflowtemp",
+        source_cagg="ems_esp_boiler_1h",
+        baseline_cagg="ems_esp_boiler_baseline_30d",
+        metric="curflowtemp_avg",
+        stats_field="curflowtemp_stats",
+    ),
+    UnivariateMetric(
+        uc="boiler_rettemp",
+        source_cagg="ems_esp_boiler_1h",
+        baseline_cagg="ems_esp_boiler_baseline_30d",
+        metric="rettemp_avg",
+        stats_field="rettemp_stats",
+    ),
+    UnivariateMetric(
+        uc="boiler_heatingactive",
+        source_cagg="ems_esp_boiler_1h",
+        baseline_cagg="ems_esp_boiler_baseline_30d",
+        metric="heatingactive_samples",
+        stats_field="heatingactive_stats",
+    ),
+    # DHW — `ems_esp_dhw_1h` × `ems_esp_dhw_baseline_30d`.
+    UnivariateMetric(
+        uc="dhw_curtemp",
+        source_cagg="ems_esp_dhw_1h",
+        baseline_cagg="ems_esp_dhw_baseline_30d",
+        metric="curtemp_avg",
+        stats_field="curtemp_stats",
+    ),
+    UnivariateMetric(
+        uc="dhw_curflow",
+        source_cagg="ems_esp_dhw_1h",
+        baseline_cagg="ems_esp_dhw_baseline_30d",
+        metric="curflow_avg",
+        stats_field="curflow_stats",
+    ),
+    # SolarEdge inverter — group on `inverter_id`.
+    UnivariateMetric(
+        uc="solar_ac_power",
+        source_cagg="solaredge_inverter_1h",
+        baseline_cagg="solaredge_inverter_baseline_30d",
+        metric="ac_power_avg",
+        stats_field="ac_power_stats",
+        group_cols=("inverter_id",),
+    ),
+    UnivariateMetric(
+        uc="solar_inverter_temperature",
+        source_cagg="solaredge_inverter_1h",
+        baseline_cagg="solaredge_inverter_baseline_30d",
+        metric="temperature_avg",
+        stats_field="temperature_stats",
+        group_cols=("inverter_id",),
+    ),
+    # SolarEdge powerflow — group on `inverter_id`.
+    UnivariateMetric(
+        uc="pv_production",
+        source_cagg="solaredge_powerflow_1h",
+        baseline_cagg="solaredge_powerflow_baseline_30d",
+        metric="pv_production_avg",
+        stats_field="pv_production_stats",
+        group_cols=("inverter_id",),
+    ),
+    UnivariateMetric(
+        uc="consumer_total",
+        source_cagg="solaredge_powerflow_1h",
+        baseline_cagg="solaredge_powerflow_baseline_30d",
+        metric="consumer_total_avg",
+        stats_field="consumer_total_stats",
+        group_cols=("inverter_id",),
+    ),
+    UnivariateMetric(
+        uc="grid_power",
+        source_cagg="solaredge_powerflow_1h",
+        baseline_cagg="solaredge_powerflow_baseline_30d",
+        metric="grid_power_avg",
+        stats_field="grid_power_stats",
+        group_cols=("inverter_id",),
+    ),
+    # Wallbox meter — group on `meter_id`.
+    UnivariateMetric(
+        uc="wallbox_power_total",
+        source_cagg="warp_meter_1h",
+        baseline_cagg="warp_meter_baseline_30d",
+        metric="power_total_avg",
+        stats_field="power_total_stats",
+        group_cols=("meter_id",),
+    ),
+    # KNX — group on `(ga, knx_name)`. One UC for all values; the anomaly
+    # row carries the GA so insights tools can join against knx_catalog
+    # for the human-readable name and the source room/function.
+    UnivariateMetric(
+        uc="knx_value",
+        source_cagg="knx_1h",
+        baseline_cagg="knx_baseline_30d",
+        metric="avg_value",
+        stats_field="value_stats",
+        group_cols=("ga", "knx_name"),
+    ),
+)
 IFOREST_USECASES: tuple[IsolationForestUseCase, ...] = ()
 SEASONAL_MODELS: tuple[SeasonalModel, ...] = ()
 

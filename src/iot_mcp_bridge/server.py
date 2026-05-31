@@ -18,6 +18,7 @@ from . import metrics as metrics_module
 from .config import Settings, load_settings
 from .logging_setup import configure_logging, get_logger
 from .tools import domain as domain_tools
+from .tools import insights as insights_tools
 from .tools import schema as schema_tools
 from .tools import timeseries as timeseries_tools
 
@@ -337,6 +338,154 @@ async def correlate_events(
         _record_tool_call("correlate_events", "error")
         raise
     _record_tool_call("correlate_events", "ok")
+    return result
+
+
+@mcp.tool()
+async def detect_anomalies(
+    source: str | None = None,
+    severity: str | None = None,
+    uc: str | None = None,
+    since: str = "1 day",
+    until: str | None = None,
+    limit: int = 100,
+) -> dict[str, Any]:
+    """Anomalies flagged by the batch jobs over the recent past.
+
+    Filters AND-combined:
+    * ``source``   — source-CAGG name (e.g. ``"ems_esp_boiler_1h"``)
+    * ``severity`` — one of ``"info"``, ``"warning"``, ``"critical"``
+    * ``uc``       — use-case slug (e.g. ``"boiler_curburnpow"``,
+                     ``"pv_production"``)
+    * ``since``    — Postgres interval, default ``"1 day ago"``
+    * ``until``    — optional upper bound ISO timestamp
+
+    Newest first. ``limit`` capped at the server's ``query_row_limit``.
+    """
+    log.info(
+        "tool_invoked",
+        tool="detect_anomalies",
+        source=source,
+        severity=severity,
+        uc=uc,
+        since=since,
+        limit=limit,
+    )
+    try:
+        result = await insights_tools.detect_anomalies(
+            settings=_require_settings(),
+            source=source,
+            severity=severity,
+            uc=uc,
+            since=since,
+            until=until,
+            limit=limit,
+        )
+    except Exception:
+        _record_tool_call("detect_anomalies", "error")
+        raise
+    _record_tool_call("detect_anomalies", "ok")
+    return result
+
+
+@mcp.tool()
+async def explain_anomaly(
+    time: str,
+    source: str,
+    metric: str,
+    detector: str,
+    context_hours: int = 24,
+) -> dict[str, Any]:
+    """Look up a specific anomaly by its composite key and return the
+    surrounding ``context_hours`` window of the same (source, metric).
+
+    Use the four fields from a ``detect_anomalies`` result row to
+    identify the anomaly.
+    """
+    log.info(
+        "tool_invoked",
+        tool="explain_anomaly",
+        source=source,
+        metric=metric,
+        detector=detector,
+        context_hours=context_hours,
+    )
+    try:
+        result = await insights_tools.explain_anomaly(
+            settings=_require_settings(),
+            time=time,
+            source=source,
+            metric=metric,
+            detector=detector,
+            context_hours=context_hours,
+        )
+    except Exception:
+        _record_tool_call("explain_anomaly", "error")
+        raise
+    _record_tool_call("explain_anomaly", "ok")
+    return result
+
+
+@mcp.tool()
+async def get_forecast(
+    metric: str,
+    horizon_hours: int = 24,
+    model: str | None = None,
+) -> dict[str, Any]:
+    """Stored model forecasts for ``metric`` looking ``horizon_hours`` ahead.
+
+    No batch jobs populate ``mcp_forecasts`` yet — the tool works
+    against the table schema but will return an empty list until the
+    seasonal/Forecast.Solar jobs land.
+    """
+    log.info(
+        "tool_invoked",
+        tool="get_forecast",
+        metric=metric,
+        horizon_hours=horizon_hours,
+        model=model,
+    )
+    try:
+        result = await insights_tools.get_forecast(
+            settings=_require_settings(),
+            metric=metric,
+            horizon_hours=horizon_hours,
+            model=model,
+        )
+    except Exception:
+        _record_tool_call("get_forecast", "error")
+        raise
+    _record_tool_call("get_forecast", "ok")
+    return result
+
+
+@mcp.tool()
+async def generate_insight_report(
+    timeframe: str = "1 week",
+    top_n: int = 10,
+) -> dict[str, Any]:
+    """Aggregate anomaly summary over ``timeframe`` for a Markdown digest.
+
+    Returns severity counts, the top-N (uc, severity) by count, and the
+    ``top_n`` most recent warning/critical entries. Compose the prose
+    yourself — the tool only returns structured data.
+    """
+    log.info(
+        "tool_invoked",
+        tool="generate_insight_report",
+        timeframe=timeframe,
+        top_n=top_n,
+    )
+    try:
+        result = await insights_tools.generate_insight_report(
+            settings=_require_settings(),
+            timeframe=timeframe,
+            top_n=top_n,
+        )
+    except Exception:
+        _record_tool_call("generate_insight_report", "error")
+        raise
+    _record_tool_call("generate_insight_report", "ok")
     return result
 
 
