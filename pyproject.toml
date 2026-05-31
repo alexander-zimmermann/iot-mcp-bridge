@@ -1,6 +1,6 @@
 [project]
 name = "iot-mcp-bridge"
-version = "0.6.0"
+version = "0.6.1"
 description = "MCP server bridging homelab IoT data (KNX, EMS, WARP, SolarEdge) to Claude.ai via TimescaleDB"
 readme = "README.md"
 license = "GPL-2.0-or-later"
@@ -88,7 +88,10 @@ module = [
     "iot_mcp_bridge.tools.schema",
     "iot_mcp_bridge.tools.timeseries",
     "iot_mcp_bridge.tools.domain",
+    "iot_mcp_bridge.tools.insights",
     "iot_mcp_bridge.cli.import_knx_catalog",
+    "iot_mcp_bridge.jobs.db_write",
+    "iot_mcp_bridge.jobs.detect_univariate",
 ]
 disable_error_code = ["call-overload", "attr-defined", "index", "dict-item", "assignment", "arg-type"]
 
@@ -114,6 +117,13 @@ reportUnknownVariableType = "none"
 reportAttributeAccessIssue = "none"
 reportUnnecessaryIsInstance = "none"
 reportUnnecessaryComparison = "none"
+# psycopg's stubs declare `cursor.execute(query: QueryNoTemplate, ...)` where
+# QueryNoTemplate excludes plain `str`; in practice we pass dynamically-built
+# SQL strings (registry-driven detector, dynamic WHERE clauses). Same gap mypy
+# already disables via tool.mypy.overrides for these modules.
+reportArgumentType = "none"
+reportCallIssue = "none"
+reportReturnType = "none"
 
 [[tool.pyright.executionEnvironments]]
 root = "tests"

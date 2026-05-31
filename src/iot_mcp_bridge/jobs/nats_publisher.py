@@ -13,11 +13,9 @@ log = get_logger(__name__)
 
 
 def _connect_opts(settings: Settings) -> dict[str, Any]:
-    """Auth precedence: NKey-Seed-File → user/password → anonymous.
-
-    Mirrors the knx-nats-bridge publisher pattern so operators can swap
-    credentials by changing only the mounted secret, not the code.
-    """
+    """Auth precedence: creds-file → NKey-seed-file → user/password →
+    anonymous. Mirrors the knx-nats-bridge publisher so operators swap
+    auth by changing the mounted secret, not the code."""
     if not settings.nats_servers:
         raise ValueError("MCP_NATS_SERVERS is required to publish to NATS")
 
@@ -25,10 +23,12 @@ def _connect_opts(settings: Settings) -> dict[str, Any]:
         "servers": [s.strip() for s in settings.nats_servers.split(",") if s.strip()],
         "name": "iot-mcp-bridge-jobs",
         "max_reconnect_attempts": 3,
-        "connect_timeout": 5.0,
+        "connect_timeout": 5,
     }
     if settings.nats_creds_file:
         opts["user_credentials"] = settings.nats_creds_file
+    elif settings.nats_nkey_seed_file:
+        opts["nkeys_seed"] = settings.nats_nkey_seed_file
     elif settings.nats_user and settings.nats_password:
         opts["user"] = settings.nats_user
         opts["password"] = settings.nats_password
