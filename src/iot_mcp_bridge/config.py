@@ -41,6 +41,7 @@ class Settings(BaseSettings):
     nats_password: str = Field(default="", repr=False)
     nats_password_file: str | None = None
     nats_creds_file: str | None = None
+    nats_nkey_seed_file: str | None = None
 
     # S3 (rustfs) — jobs persist trained models as joblib pickles.
     s3_endpoint: str | None = None
