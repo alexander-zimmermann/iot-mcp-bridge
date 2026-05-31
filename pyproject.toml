@@ -1,6 +1,6 @@
 [project]
 name = "iot-mcp-bridge"
-version = "0.6.3"
+version = "0.6.4"
 description = "MCP server bridging homelab IoT data (KNX, EMS, WARP, SolarEdge) to Claude.ai via TimescaleDB"
 readme = "README.md"
 license = "GPL-2.0-or-later"
@@ -50,7 +50,7 @@ jobs = [
     "boto3>=1.43.18",
     "pandas>=3.0.3",
     "numpy>=2.4.6",
-    "nats-py>=2.14.0",
+    "nats-py[nkeys]>=2.14.0",
 ]
 
 [project.scripts]
