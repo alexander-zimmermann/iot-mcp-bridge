@@ -60,19 +60,26 @@ def _classify(zscore: float) -> str | None:
 def _scan_metric(
     conn: psycopg.Connection[Any], metric: UnivariateMetric
 ) -> list[_Hit]:
-    group_select = ", ".join(metric.group_cols) if metric.group_cols else ""
-    group_select_prefix = f", {group_select}" if group_select else ""
+    # Inner CTE uses bare column names (single table). Outer SELECT joins
+    # `last_bucket lb` with `<baseline_cagg> b`, both of which carry the
+    # group columns — so the outer SELECT/GROUP BY must qualify with `lb.`
+    # to disambiguate.
+    inner_group_select = ", ".join(metric.group_cols) if metric.group_cols else ""
+    inner_group_select_prefix = f", {inner_group_select}" if inner_group_select else ""
+    outer_group_select = (
+        ", ".join(f"lb.{c}" for c in metric.group_cols) if metric.group_cols else ""
+    )
+    outer_group_select_prefix = f", {outer_group_select}" if outer_group_select else ""
     baseline_join = (
         " AND ".join(f"b.{c} = lb.{c}" for c in metric.group_cols)
         if metric.group_cols
         else "TRUE"
     )
-    baseline_group = ", ".join(f"lb.{c}" for c in metric.group_cols) if metric.group_cols else ""
-    baseline_group_clause = f", {baseline_group}" if baseline_group else ""
+    outer_group_by_clause = f", {outer_group_select}" if outer_group_select else ""
 
     sql = f"""
         WITH last_bucket AS (
-            SELECT bucket{group_select_prefix}, {metric.metric} AS actual
+            SELECT bucket{inner_group_select_prefix}, {metric.metric} AS actual
             FROM {metric.source_cagg}
             WHERE bucket = (
                 SELECT max(bucket) FROM {metric.source_cagg}
@@ -80,7 +87,7 @@ def _scan_metric(
             )
         )
         SELECT
-            lb.bucket{group_select_prefix},
+            lb.bucket{outer_group_select_prefix},
             lb.actual,
             average(rollup(b.{metric.stats_field}))            AS mean,
             stddev(rollup(b.{metric.stats_field}), 'sample')   AS stddev
@@ -90,7 +97,7 @@ def _scan_metric(
           AND b.weekday    = EXTRACT(isodow FROM lb.bucket)::smallint
           AND b.day        > now() - interval '{BASELINE_LOOKBACK_DAYS} days'
           AND {baseline_join}
-        GROUP BY lb.bucket, lb.actual{baseline_group_clause}
+        GROUP BY lb.bucket, lb.actual{outer_group_by_clause}
     """
 
     hits: list[_Hit] = []
