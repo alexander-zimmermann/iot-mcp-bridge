@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Literal
+from urllib.parse import quote
 
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -120,10 +121,11 @@ class Settings(BaseSettings):
 
     @property
     def db_dsn(self) -> str:
-        return (
-            f"postgresql://{self.db_username}:{self.db_password}"
-            f"@{self.db_host}:{self.db_port}/{self.db_name}"
-        )
+        # URL-encode user + password — random-generated passwords routinely
+        # contain `/`, `@`, `:`, `+` that break psycopg's URI parser.
+        user = quote(self.db_username, safe="")
+        password = quote(self.db_password, safe="")
+        return f"postgresql://{user}:{password}@{self.db_host}:{self.db_port}/{self.db_name}"
 
     @property
     def db_write_dsn(self) -> str:
@@ -134,10 +136,9 @@ class Settings(BaseSettings):
                 "MCP_DB_WRITE_USERNAME / MCP_DB_WRITE_PASSWORD "
                 "(or *_FILE variants) are required for the jobs image"
             )
-        return (
-            f"postgresql://{self.db_write_username}:{self.db_write_password}"
-            f"@{self.db_host}:{self.db_port}/{self.db_name}"
-        )
+        user = quote(self.db_write_username, safe="")
+        password = quote(self.db_write_password, safe="")
+        return f"postgresql://{user}:{password}@{self.db_host}:{self.db_port}/{self.db_name}"
 
 
 def load_settings() -> Settings:
