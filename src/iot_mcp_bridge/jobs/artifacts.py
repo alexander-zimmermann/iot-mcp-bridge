@@ -35,15 +35,15 @@ def _key(detector: str, uc: str) -> str:
 def save_model(settings: Settings, detector: str, uc: str, obj: Any) -> None:
     buf = BytesIO()
     joblib.dump(obj, buf)
-    buf.seek(0)
+    body = buf.getvalue()
     key = _key(detector, uc)
     _s3_client(settings).put_object(
         Bucket=settings.s3_bucket,
         Key=key,
-        Body=buf.getvalue(),
+        Body=body,
         ContentType="application/octet-stream",
     )
-    log.info("model_saved", bucket=settings.s3_bucket, key=key, bytes=buf.tell())
+    log.info("model_saved", bucket=settings.s3_bucket, key=key, bytes=len(body))
 
 
 def load_model(settings: Settings, detector: str, uc: str) -> Any | None:
