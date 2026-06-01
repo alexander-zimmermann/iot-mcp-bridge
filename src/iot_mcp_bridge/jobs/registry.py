@@ -34,11 +34,21 @@ class UnivariateMetric:
 
 @dataclass(frozen=True)
 class IsolationForestUseCase:
-    """Multivariate features fit by IsolationForest, scored hourly."""
+    """Multivariate features fit by IsolationForest, scored hourly.
+
+    One model per group-value combination (e.g. per inverter_id, per
+    meter_id) — a 2nd inverter doesn't poison the existing fit.
+
+    `include_hour_of_day=True` appends EXTRACT(hour FROM bucket) — used
+    for diurnal metrics (PV) where the same value can be normal at noon
+    and anomalous at midnight.
+    """
 
     uc: str
     source_cagg: str
     feature_cols: tuple[str, ...]
+    group_cols: tuple[str, ...] = ()
+    include_hour_of_day: bool = False
     lookback_days: int = 60
     contamination: float = 0.005
     severity_floor: str = "info"
@@ -168,7 +178,53 @@ UNIVARIATE_METRICS: tuple[UnivariateMetric, ...] = (
         group_cols=("ga", "knx_name"),
     ),
 )
-IFOREST_USECASES: tuple[IsolationForestUseCase, ...] = ()
+IFOREST_USECASES: tuple[IsolationForestUseCase, ...] = (
+    # Heating boiler — single boiler, no group_cols. heatingactive_samples
+    # gives the IF a coarse "is the burner firing this hour" signal that
+    # disambiguates legitimate low-power idle from a sensor stall at zero.
+    IsolationForestUseCase(
+        uc="heating_iforest",
+        source_cagg="ems_esp_boiler_1h",
+        feature_cols=(
+            "curburnpow_avg",
+            "curflowtemp_avg",
+            "rettemp_avg",
+            "outdoortemp_avg",
+            "heatingactive_samples",
+        ),
+    ),
+    # PV powerflow — group on inverter_id; hour-of-day matters because PV
+    # production is zero by 22:00 and very different at 06:00 vs 12:00.
+    IsolationForestUseCase(
+        uc="pv_iforest",
+        source_cagg="solaredge_powerflow_1h",
+        feature_cols=(
+            "pv_production_avg",
+            "consumer_total_avg",
+            "grid_power_avg",
+            "grid_consumption_avg",
+            "grid_delivery_avg",
+        ),
+        group_cols=("inverter_id",),
+        include_hour_of_day=True,
+    ),
+    # Wallbox meter — group on meter_id. Voltage + current per phase
+    # catches phase imbalance and brownouts that power_total alone hides.
+    IsolationForestUseCase(
+        uc="wallbox_iforest",
+        source_cagg="warp_meter_1h",
+        feature_cols=(
+            "power_total_avg",
+            "voltage_l1_avg",
+            "voltage_l2_avg",
+            "voltage_l3_avg",
+            "current_l1_avg",
+            "current_l2_avg",
+            "current_l3_avg",
+        ),
+        group_cols=("meter_id",),
+    ),
+)
 SEASONAL_MODELS: tuple[SeasonalModel, ...] = ()
 
 

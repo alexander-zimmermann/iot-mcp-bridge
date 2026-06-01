@@ -1,6 +1,6 @@
 [project]
 name = "iot-mcp-bridge"
-version = "0.6.4"
+version = "0.7.0"
 description = "MCP server bridging homelab IoT data (KNX, EMS, WARP, SolarEdge) to Claude.ai via TimescaleDB"
 readme = "README.md"
 license = "GPL-2.0-or-later"
@@ -101,7 +101,13 @@ ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 # ML / NATS / S3 deps in the jobs CLI don't publish PEP 561 type stubs.
-module = ["nats", "joblib", "boto3", "botocore.client"]
+module = [
+    "nats",
+    "joblib",
+    "boto3",
+    "botocore.client",
+    "sklearn.*",
+]
 ignore_missing_imports = true
 
 # Pylance/Pyright counterparts to the mypy overrides above — quiet the
