@@ -15,6 +15,7 @@ SUBCOMMANDS: tuple[str, ...] = (
     "detect-univariate",
     "train-iforest",
     "score-iforest",
+    "detect-knx-join",
     "train-seasonal",
     "score-seasonal",
     "forecast-solar",

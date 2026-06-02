@@ -57,6 +57,19 @@ class IsolationForestUseCase:
 
 
 @dataclass(frozen=True)
+class KnxJoinUseCase:
+    """Rule-based detector against per-room KNX-Joins.
+
+    Each UC's SQL + threshold logic lives in `detect_knx_join`; this
+    registry only enumerates slugs so the dispatcher can iterate them
+    and ops can silence individual UCs without code changes.
+    """
+
+    uc: str
+    silenced: bool = False
+
+
+@dataclass(frozen=True)
 class SeasonalModel:
     """statsforecast MSTL+AutoARIMA target metric."""
 
@@ -225,6 +238,17 @@ IFOREST_USECASES: tuple[IsolationForestUseCase, ...] = (
         group_cols=("meter_id",),
     ),
 )
+KNX_JOIN_USECASES: tuple[KnxJoinUseCase, ...] = (
+    # Per-room rule: FBH-Stellwert open >50% AND room stays >=1°C below
+    # setpoint for >=2h. Detects stuck valves, bled circuits, or
+    # sensor mismatches the IF would not isolate.
+    KnxJoinUseCase(uc="fbh_cold"),
+    # Per-room rule: window open while FBH is heating with outdoor
+    # temp <12°C. Catches "heater pumping into open window" — a
+    # comfort + energy waste pattern that the Basalte UI shouldn't
+    # need to remember to surface.
+    KnxJoinUseCase(uc="window_while_heating"),
+)
 SEASONAL_MODELS: tuple[SeasonalModel, ...] = ()
 
 
@@ -232,5 +256,6 @@ def all_slugs() -> set[str]:
     return (
         {m.uc for m in UNIVARIATE_METRICS}
         | {u.uc for u in IFOREST_USECASES}
+        | {k.uc for k in KNX_JOIN_USECASES}
         | {s.uc for s in SEASONAL_MODELS}
     )
