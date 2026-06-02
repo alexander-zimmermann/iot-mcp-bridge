@@ -168,7 +168,7 @@ async def get_schema(table: str, jsonb_sample_size: int = 1000) -> dict[str, Any
     hint = None
     if table == "knx":
         hint = (
-            "Prefer querying knx_catalog_view (knx joined with knx_catalog) — it "
+            "Prefer querying ga_catalog_view (knx joined with ga_catalog) — it "
             "exposes ga_name, room, function, description per row, so queries can "
             "filter or group by room/function without round-tripping the catalog."
         )

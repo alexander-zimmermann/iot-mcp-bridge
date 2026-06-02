@@ -1,4 +1,4 @@
-"""Import the GA catalog YAML into the Postgres ``knx_catalog`` table.
+"""Import the GA catalog YAML into the Postgres ``ga_catalog`` table.
 
 One-shot CLI invoked from a K8s Job. Reads MCP_DB_* env vars (same as the
 MCP server) plus a ``--catalog-path`` argument. Idempotent:
@@ -8,7 +8,7 @@ MCP server) plus a ``--catalog-path`` argument. Idempotent:
 * DELETE rows whose GA is no longer in the YAML (tombstone purge)
 
 Connects with admin credentials -- the read-only role used by the MCP
-server cannot write to ``knx_catalog``.
+server cannot write to ``ga_catalog``.
 """
 
 from __future__ import annotations
@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 
 
 _UPSERT_SQL = """
-INSERT INTO knx_catalog (ga, name, room, function, description, dpt, updated_at)
+INSERT INTO ga_catalog (ga, name, room, function, description, dpt, updated_at)
 VALUES (%s, %s, %s, %s, %s, %s, now())
 ON CONFLICT (ga) DO UPDATE SET
     name        = EXCLUDED.name,
@@ -38,11 +38,11 @@ ON CONFLICT (ga) DO UPDATE SET
     dpt         = EXCLUDED.dpt,
     updated_at  = now()
 WHERE
-    knx_catalog.name        IS DISTINCT FROM EXCLUDED.name OR
-    knx_catalog.room        IS DISTINCT FROM EXCLUDED.room OR
-    knx_catalog.function    IS DISTINCT FROM EXCLUDED.function OR
-    knx_catalog.description IS DISTINCT FROM EXCLUDED.description OR
-    knx_catalog.dpt         IS DISTINCT FROM EXCLUDED.dpt
+    ga_catalog.name        IS DISTINCT FROM EXCLUDED.name OR
+    ga_catalog.room        IS DISTINCT FROM EXCLUDED.room OR
+    ga_catalog.function    IS DISTINCT FROM EXCLUDED.function OR
+    ga_catalog.description IS DISTINCT FROM EXCLUDED.description OR
+    ga_catalog.dpt         IS DISTINCT FROM EXCLUDED.dpt
 """
 
 
@@ -88,7 +88,7 @@ def run(catalog_path: Path, dsn: str) -> int:
     keys = list(catalog.keys())
     with psycopg.connect(dsn, autocommit=False) as conn, conn.cursor() as cur:
         cur.executemany(_UPSERT_SQL, rows)
-        cur.execute("DELETE FROM knx_catalog WHERE ga != ALL(%s)", (keys,))
+        cur.execute("DELETE FROM ga_catalog WHERE ga != ALL(%s)", (keys,))
         deleted = cur.rowcount
         conn.commit()
 
@@ -102,7 +102,7 @@ def run(catalog_path: Path, dsn: str) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Import GA catalog into knx_catalog")
+    parser = argparse.ArgumentParser(description="Import GA catalog into ga_catalog")
     parser.add_argument(
         "--catalog-path",
         type=Path,

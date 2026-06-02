@@ -37,7 +37,7 @@ behind high-level questions:
 | `query_energy_flow(from_ts, to_ts, bucket)`           | One row per bucket joining PV production, grid, household consumer, battery net, and wallbox power. Reads the hourly continuous aggregates; bucket must be `1 hour` or coarser.       |
 | `query_heating_cycles(from_ts, to_ts, …)`             | Detects ON/OFF burner cycles from `ems_esp` (`topic = 'boiler_data'`) via `LAG` window functions. Returns one row per cycle with start, end, duration, peak and average burner power. |
 | `query_room_climate(room, from_ts, to_ts, bucket)`    | Bucketed temp/humidity/etc. per GA name within a room. `room` is whitelisted against the imported KNX catalog so unknown rooms produce a precise error the LLM can self-correct.      |
-| `query_knx_events(from_ts, to_ts, room, ga, name, …)` | Raw event log against the `knx_catalog_view` view; supports room/ga/name predicates with a default limit of 200.                                                                      |
+| `query_knx_events(from_ts, to_ts, room, ga, name, …)` | Raw event log against the `ga_catalog_view` view; supports room/ga/name predicates with a default limit of 200.                                                                      |
 | `correlate_events(source_a, source_b, …)`             | Lagged Pearson correlation between two time-series streams. Each `source` is `{table, column}`; returns the best lag plus the top 10 by `\|corr\|`.                                   |
 
 Later phases (tracked separately) add anomaly detection, live state via NATS,
@@ -118,7 +118,7 @@ docker run --rm -p 8080:8080 \
 ## GA catalog
 
 The domain tools (`query_room_climate`, `query_knx_events`) need a Postgres
-`knx_catalog` table that maps each KNX group address to a name, room,
+`ga_catalog` table that maps each KNX group address to a name, room,
 function, and description. The catalog is generated from the ETS `.knxproj`
 file by `knx-nats-bridge`, distributed as a ConfigMap, and imported into
 Postgres by the bundled `iot-mcp-bridge-import-ga-catalog` CLI:

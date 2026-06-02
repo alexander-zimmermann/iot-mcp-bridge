@@ -75,7 +75,7 @@ def _seed(conn: psycopg.Connection) -> None:
 
     conn.execute(
         """
-        CREATE TABLE knx_catalog (
+        CREATE TABLE ga_catalog (
             ga          TEXT PRIMARY KEY,
             name        TEXT NOT NULL,
             room        TEXT,
@@ -88,10 +88,10 @@ def _seed(conn: psycopg.Connection) -> None:
     )
     conn.execute(
         """
-        CREATE OR REPLACE VIEW knx_catalog_view AS
+        CREATE OR REPLACE VIEW ga_catalog_view AS
         SELECT k.time, k.ga, k.knx_main, k.knx_middle, k.knx_sub, k.dpt, k.value,
                n.name AS ga_name, n.room, n.function, n.description
-        FROM knx k LEFT JOIN knx_catalog n USING (ga)
+        FROM knx k LEFT JOIN ga_catalog n USING (ga)
         """
     )
 
@@ -149,7 +149,7 @@ def _seed(conn: psycopg.Connection) -> None:
     # Catalog seed — 8 GAs covering the categories the tools filter on.
     conn.execute(
         """
-        INSERT INTO knx_catalog (ga, name, room, function, dpt, description) VALUES
+        INSERT INTO ga_catalog (ga, name, room, function, dpt, description) VALUES
             ('1/2/0',  'Sensors.1F.Bedroom.Temperature',   'Bedroom',    'Sensors',  '9.001', NULL),
             ('1/2/1',  'Sensors.1F.Bedroom.Humidity',      'Bedroom',    'Climate',  '9.007', NULL),
             ('1/2/2',  'Lighting.1F.Bedroom.Ceiling',      'Bedroom',    'Lighting', '1.001', NULL),

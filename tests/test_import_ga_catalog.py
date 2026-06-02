@@ -20,7 +20,7 @@ def importer_dsn(timescaledb_container: PostgresContainer) -> str:
 
 @pytest.fixture(autouse=True)
 def _reset_catalog(importer_dsn: str) -> Iterator[None]:
-    """Truncate knx_catalog before each importer test, restore the seed after."""
+    """Truncate ga_catalog before each importer test, restore the seed after."""
     seed_rows = [
         ("1/2/0", "Sensors.1F.Bedroom.Temperature", "Bedroom", "Sensors", None, "9.001"),
         ("1/2/1", "Sensors.1F.Bedroom.Humidity", "Bedroom", "Climate", None, "9.007"),
@@ -32,14 +32,14 @@ def _reset_catalog(importer_dsn: str) -> Iterator[None]:
         ("1/2/300", "General.Central.Presence", None, None, None, "1.011"),
     ]
     with psycopg.connect(importer_dsn, autocommit=True) as conn, conn.cursor() as cur:
-        cur.execute("TRUNCATE knx_catalog")
+        cur.execute("TRUNCATE ga_catalog")
     yield
     # Restore seed so tests after this module see the original catalog rows.
     with psycopg.connect(importer_dsn, autocommit=True) as conn, conn.cursor() as cur:
-        cur.execute("TRUNCATE knx_catalog")
+        cur.execute("TRUNCATE ga_catalog")
         cur.executemany(
             """
-            INSERT INTO knx_catalog (ga, name, room, function, description, dpt)
+            INSERT INTO ga_catalog (ga, name, room, function, description, dpt)
             VALUES (%s, %s, %s, %s, %s, %s)
             """,
             seed_rows,
@@ -96,7 +96,7 @@ def test_run_inserts_rows(tmp_path: Path, importer_dsn: str) -> None:
     assert inserted == 2
 
     with psycopg.connect(importer_dsn) as conn, conn.cursor() as cur:
-        cur.execute("SELECT ga, name, room, function FROM knx_catalog ORDER BY ga")
+        cur.execute("SELECT ga, name, room, function FROM ga_catalog ORDER BY ga")
         rows = cur.fetchall()
     assert rows == [
         ("1/0/1", "Lighting.1F.Bedroom.Ceiling", "Bedroom", "Lighting"),
@@ -117,7 +117,7 @@ def test_run_is_idempotent(tmp_path: Path, importer_dsn: str) -> None:
 
     # First run set updated_at; record it then re-run.
     with psycopg.connect(importer_dsn) as conn, conn.cursor() as cur:
-        cur.execute("SELECT updated_at FROM knx_catalog WHERE ga = '1/0/1'")
+        cur.execute("SELECT updated_at FROM ga_catalog WHERE ga = '1/0/1'")
         row = cur.fetchone()
         assert row is not None
         first_updated_at = row[0]
@@ -125,7 +125,7 @@ def test_run_is_idempotent(tmp_path: Path, importer_dsn: str) -> None:
     run(path, importer_dsn)
 
     with psycopg.connect(importer_dsn) as conn, conn.cursor() as cur:
-        cur.execute("SELECT updated_at FROM knx_catalog WHERE ga = '1/0/1'")
+        cur.execute("SELECT updated_at FROM ga_catalog WHERE ga = '1/0/1'")
         row = cur.fetchone()
         assert row is not None
         second_updated_at = row[0]
@@ -153,7 +153,7 @@ def test_run_purges_stale_rows(tmp_path: Path, importer_dsn: str) -> None:
     run(pruned, importer_dsn)
 
     with psycopg.connect(importer_dsn) as conn, conn.cursor() as cur:
-        cur.execute("SELECT ga FROM knx_catalog ORDER BY ga")
+        cur.execute("SELECT ga FROM ga_catalog ORDER BY ga")
         rows = [r[0] for r in cur.fetchall()]
     assert rows == ["1/0/1"]
 
@@ -183,6 +183,6 @@ def test_run_updates_changed_fields(tmp_path: Path, importer_dsn: str) -> None:
     run(v2, importer_dsn)
 
     with psycopg.connect(importer_dsn) as conn, conn.cursor() as cur:
-        cur.execute("SELECT name, room, function FROM knx_catalog WHERE ga = '1/0/1'")
+        cur.execute("SELECT name, room, function FROM ga_catalog WHERE ga = '1/0/1'")
         row = cur.fetchone()
     assert row == ("New name", "NewRoom", "Lighting")
