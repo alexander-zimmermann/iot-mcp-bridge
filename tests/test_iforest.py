@@ -19,7 +19,7 @@ from iot_mcp_bridge.jobs.iforest_common import ModelEnvelope
 
 def test_iforest_registry_slugs_unique_and_disjoint_from_univariate() -> None:
     """Slugs across UC families must be globally unique — they share
-    the NATS subject namespace and the knx-nats-bridge write-mapping."""
+    the NATS subject namespace and the knx-nats-bridge writer-rules."""
     if_slugs = [u.uc for u in registry.IFOREST_USECASES]
     uni_slugs = [m.uc for m in registry.UNIVARIATE_METRICS]
     assert len(if_slugs) == len(set(if_slugs)), f"duplicate IF slugs: {if_slugs}"

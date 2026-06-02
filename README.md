@@ -115,17 +115,17 @@ docker run --rm -p 8080:8080 \
   ghcr.io/alexander-zimmermann/iot-mcp-bridge:latest
 ```
 
-## KNX catalog
+## GA catalog
 
 The domain tools (`query_room_climate`, `query_knx_events`) need a Postgres
 `knx_catalog` table that maps each KNX group address to a name, room,
 function, and description. The catalog is generated from the ETS `.knxproj`
 file by `knx-nats-bridge`, distributed as a ConfigMap, and imported into
-Postgres by the bundled `iot-mcp-bridge-import-knx-catalog` CLI:
+Postgres by the bundled `iot-mcp-bridge-import-ga-catalog` CLI:
 
 ```bash
-uv run python -m iot_mcp_bridge.cli.import_knx_catalog \
-    --catalog-path /etc/iot-mcp-bridge/knx-catalog.yaml
+uv run python -m iot_mcp_bridge.cli.import_ga_catalog \
+    --catalog-path /etc/iot-mcp-bridge/ga-catalog.yaml
 ```
 
 The CLI uses `MCP_DB_*` env vars for the connection (admin role required —

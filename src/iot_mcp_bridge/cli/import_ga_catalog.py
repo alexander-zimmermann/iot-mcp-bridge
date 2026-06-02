@@ -1,4 +1,4 @@
-"""Import the KNX catalog YAML into the Postgres ``knx_catalog`` table.
+"""Import the GA catalog YAML into the Postgres ``knx_catalog`` table.
 
 One-shot CLI invoked from a K8s Job. Reads MCP_DB_* env vars (same as the
 MCP server) plus a ``--catalog-path`` argument. Idempotent:
@@ -102,12 +102,12 @@ def run(catalog_path: Path, dsn: str) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Import KNX catalog into knx_catalog")
+    parser = argparse.ArgumentParser(description="Import GA catalog into knx_catalog")
     parser.add_argument(
         "--catalog-path",
         type=Path,
         required=True,
-        help="Path to the knx-catalog.yaml file",
+        help="Path to the ga-catalog.yaml file",
     )
     parser.add_argument("--verbose", "-v", action="store_true")
     args = parser.parse_args(argv)

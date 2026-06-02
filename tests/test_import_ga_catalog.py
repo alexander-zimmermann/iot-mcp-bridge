@@ -7,7 +7,7 @@ import psycopg
 import pytest
 from testcontainers.postgres import PostgresContainer
 
-from iot_mcp_bridge.cli.import_knx_catalog import _read_catalog, _to_rows, run
+from iot_mcp_bridge.cli.import_ga_catalog import _read_catalog, _to_rows, run
 
 
 @pytest.fixture
@@ -47,7 +47,7 @@ def _reset_catalog(importer_dsn: str) -> Iterator[None]:
 
 
 def _write_catalog(tmp: Path, contents: str) -> Path:
-    p = tmp / "knx-catalog.yaml"
+    p = tmp / "ga-catalog.yaml"
     p.write_text(contents, encoding="utf-8")
     return p
 

@@ -1,7 +1,7 @@
 """Single source of truth for anomaly use-cases.
 
 Each UC owns a stable slug — the slug becomes part of the NATS subject
-(`anomaly.<slug>.<severity>`) which the knx-nats-bridge write-mapping
+(`anomaly.<slug>.<severity>`) which the knx-nats-bridge writer-rules
 resolves to a KNX-GA. Once published, do NOT rename a slug; the mapping
 ConfigMap and Basalte notification rules pin to it.
 """

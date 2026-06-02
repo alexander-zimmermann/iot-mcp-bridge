@@ -1,6 +1,6 @@
 [project]
 name = "iot-mcp-bridge"
-version = "0.7.1"
+version = "0.8.0"
 description = "MCP server bridging homelab IoT data (KNX, EMS, WARP, SolarEdge) to Claude.ai via TimescaleDB"
 readme = "README.md"
 license = "GPL-2.0-or-later"
@@ -89,7 +89,7 @@ module = [
     "iot_mcp_bridge.tools.timeseries",
     "iot_mcp_bridge.tools.domain",
     "iot_mcp_bridge.tools.insights",
-    "iot_mcp_bridge.cli.import_knx_catalog",
+    "iot_mcp_bridge.cli.import_ga_catalog",
     "iot_mcp_bridge.jobs.db_write",
     "iot_mcp_bridge.jobs.detect_univariate",
 ]
