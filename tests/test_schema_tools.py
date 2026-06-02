@@ -44,4 +44,4 @@ async def test_get_schema_unknown_table_raises(db_pool: None) -> None:
 async def test_get_schema_knx_hint_present(db_pool: None) -> None:
     schema = await schema_tools.get_schema("knx")
     assert schema["hint"] is not None
-    assert "knx_catalog_view" in schema["hint"]
+    assert "ga_catalog_view" in schema["hint"]

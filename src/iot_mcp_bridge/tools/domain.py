@@ -184,7 +184,7 @@ async def query_heating_cycles(
 # query_room_climate
 # =====================================================================
 
-_DISTINCT_ROOMS_SQL = "SELECT DISTINCT room FROM knx_catalog WHERE room IS NOT NULL ORDER BY room"
+_DISTINCT_ROOMS_SQL = "SELECT DISTINCT room FROM ga_catalog WHERE room IS NOT NULL ORDER BY room"
 
 
 async def _known_rooms() -> list[str]:
@@ -203,7 +203,7 @@ async def query_room_climate(
 ) -> dict[str, Any]:
     """Bucketed average reading per GA name within a room.
 
-    ``room`` is validated against the distinct values in ``knx_catalog`` so
+    ``room`` is validated against the distinct values in ``ga_catalog`` so
     unknown rooms produce a precise error the LLM can self-correct against.
 
     Optional ``functions`` narrows the result to GAs whose ETS function name
@@ -233,7 +233,7 @@ async def query_room_climate(
             time_bucket(%s, time) AS bucket,
             ga_name,
             AVG(value)::float     AS value_avg
-        FROM knx_catalog_view
+        FROM ga_catalog_view
         WHERE {where}
         GROUP BY bucket, ga_name
         ORDER BY bucket, ga_name
@@ -243,7 +243,7 @@ async def query_room_climate(
 
     row_limit = settings.query_row_limit
     m = metrics_module.get()
-    m.db_queries.labels(tool="query_room_climate", table_used="knx_catalog_view").inc()
+    m.db_queries.labels(tool="query_room_climate", table_used="ga_catalog_view").inc()
     with m.db_query_duration.labels(tool="query_room_climate").time():
         async with connection() as conn:
             cur = await conn.execute(stmt, params)
@@ -276,11 +276,11 @@ async def query_knx_events(
     functions: list[str] | None = None,
     limit: int = 200,
 ) -> dict[str, Any]:
-    """Raw event log against ``knx_catalog_view``.
+    """Raw event log against ``ga_catalog_view``.
 
     Predicates (all optional, AND-combined):
 
-    * ``room``      — exact match against ``knx_catalog.room``
+    * ``room``      — exact match against ``ga_catalog.room``
     * ``ga``        — exact GA match (``"4/2/161"``)
     * ``name``      — substring match against ``ga_name`` via ``ILIKE``;
                       pass partial words like ``"Beleuchtung"``
@@ -314,7 +314,7 @@ async def query_knx_events(
     stmt = sql.SQL(
         """
         SELECT time, ga, ga_name, room, function, dpt, value
-        FROM knx_catalog_view
+        FROM ga_catalog_view
         WHERE {where}
         ORDER BY time DESC
         LIMIT %s
@@ -322,7 +322,7 @@ async def query_knx_events(
     ).format(where=sql.SQL(" AND ").join(where_parts))
 
     m = metrics_module.get()
-    m.db_queries.labels(tool="query_knx_events", table_used="knx_catalog_view").inc()
+    m.db_queries.labels(tool="query_knx_events", table_used="ga_catalog_view").inc()
     with m.db_query_duration.labels(tool="query_knx_events").time():
         async with connection() as conn:
             rows = await (await conn.execute(stmt, params)).fetchall()

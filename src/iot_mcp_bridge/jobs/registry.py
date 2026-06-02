@@ -167,7 +167,7 @@ UNIVARIATE_METRICS: tuple[UnivariateMetric, ...] = (
         group_cols=("meter_id",),
     ),
     # KNX — group on `(ga, knx_name)`. One UC for all values; the anomaly
-    # row carries the GA so insights tools can join against knx_catalog
+    # row carries the GA so insights tools can join against ga_catalog
     # for the human-readable name and the source room/function.
     UnivariateMetric(
         uc="knx_value",

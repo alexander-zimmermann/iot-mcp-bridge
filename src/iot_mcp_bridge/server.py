@@ -176,7 +176,7 @@ async def query_room_climate(
 ) -> dict[str, Any]:
     """Bucketed average reading per GA name within a room.
 
-    ``room`` is validated against the distinct rooms in ``knx_catalog`` so
+    ``room`` is validated against the distinct rooms in ``ga_catalog`` so
     unknown rooms produce a precise error the LLM can self-correct against.
     Optional ``functions`` narrows the result to GAs whose ETS function name
     is in the given list.
@@ -208,7 +208,7 @@ async def query_knx_events(
     functions: list[str] | None = None,
     limit: int = 200,
 ) -> dict[str, Any]:
-    """Raw KNX event log against ``knx_catalog_view``.
+    """Raw KNX event log against ``ga_catalog_view``.
 
     All predicates AND-combined; pass none for an unfiltered window.
 
