@@ -29,6 +29,13 @@
       "groupName": "python base image",
     },
     {
+      // Pin Python at 3.13.x — statsforecast has no cp314 wheels.
+      "matchManagers": ["dockerfile", "pep621"],
+      "matchPackageNames": ["python"],
+      "matchUpdateTypes": ["major", "minor"],
+      "enabled": false,
+    },
+    {
       "matchManagers": ["pep621"],
       "matchUpdateTypes": ["patch", "minor"],
       "groupName": "python deps (non-major)",
