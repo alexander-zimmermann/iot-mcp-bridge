@@ -1,6 +1,6 @@
 [project]
 name = "iot-mcp-bridge"
-version = "0.11.0"
+version = "1.0.0"
 description = "MCP server bridging homelab IoT data (KNX, EMS, WARP, SolarEdge) to Claude.ai via TimescaleDB"
 readme = "README.md"
 license = "GPL-2.0-or-later"
@@ -40,22 +40,8 @@ dev = [
     "types-PyYAML>=6.0.12.20260518",
     "pre-commit>=4.6.0",
 ]
-# Heavy ML/data deps used only by the batch-job CLI subcommands. Kept in a
-# separate extra so local dev (`uv sync`) can skip ~400 MB of scientific
-# libraries; the production Dockerfile installs them via `.[jobs]`.
-jobs = [
-    "scikit-learn>=1.9.0",
-    "statsforecast>=2.0.3",
-    "joblib>=1.5.3",
-    "boto3>=1.43.21",
-    "pandas>=3.0.3",
-    "numpy>=2.4.6",
-    "nats-py[nkeys]>=2.14.0",
-]
-
 [project.scripts]
 iot-mcp-bridge = "iot_mcp_bridge.__main__:main"
-iot-mcp-bridge-jobs = "iot_mcp_bridge.jobs.__main__:main"
 
 [build-system]
 requires = ["hatchling"]
@@ -89,29 +75,11 @@ module = [
     "iot_mcp_bridge.tools.timeseries",
     "iot_mcp_bridge.tools.domain",
     "iot_mcp_bridge.tools.insights",
-    "iot_mcp_bridge.cli.import_ga_catalog",
-    "iot_mcp_bridge.jobs.db_write",
-    "iot_mcp_bridge.jobs.detect_univariate",
 ]
 disable_error_code = ["call-overload", "attr-defined", "index", "dict-item", "assignment", "arg-type"]
 
 [[tool.mypy.overrides]]
 module = ["fastmcp", "fastmcp.*", "testcontainers.*"]
-ignore_missing_imports = true
-
-[[tool.mypy.overrides]]
-# ML / NATS / S3 deps in the jobs CLI don't publish PEP 561 type stubs.
-module = [
-    "nats",
-    "joblib",
-    "boto3",
-    "botocore.client",
-    "sklearn.*",
-    "statsforecast",
-    "statsforecast.*",
-    "pandas",
-    "pandas.*",
-]
 ignore_missing_imports = true
 
 # Pylance/Pyright counterparts to the mypy overrides above — quiet the
