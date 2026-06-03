@@ -60,6 +60,18 @@ class Settings(BaseSettings):
     smtp_from: str = "admin@zimmermann.sh"
     smtp_to: str = "admin@zimmermann.sh"
 
+    # Forecast.Solar — PV-production forecast HTTPS API. Personal-Plus tier
+    # supports up to 2 planes in a single request, so the homelab's
+    # east+west roof fits one hourly call. Planes are JSON-encoded so
+    # adding a 3rd plane is a config change, not a code change:
+    #   [{"dec":17,"az":-51,"kwp":6.175},{"dec":17,"az":129,"kwp":6.435}]
+    forecast_solar_api_key: str = Field(default="", repr=False)
+    forecast_solar_api_key_file: str | None = None
+    forecast_solar_lat: float | None = None
+    forecast_solar_lon: float | None = None
+    forecast_solar_planes: str = "[]"
+    forecast_solar_base_url: str = "https://api.forecast.solar"
+
     query_row_limit: int = 5000
 
     metrics_port: int = 9090
@@ -101,6 +113,10 @@ class Settings(BaseSettings):
             self.s3_access_key = Path(self.s3_access_key_file).read_text(encoding="utf-8").strip()
         if self.s3_secret_key_file:
             self.s3_secret_key = Path(self.s3_secret_key_file).read_text(encoding="utf-8").strip()
+        if self.forecast_solar_api_key_file:
+            self.forecast_solar_api_key = (
+                Path(self.forecast_solar_api_key_file).read_text(encoding="utf-8").strip()
+            )
         return self
 
     @model_validator(mode="after")

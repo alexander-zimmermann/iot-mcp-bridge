@@ -128,10 +128,10 @@ async def get_forecast(
     horizon_hours: int = 24,
     model: str | None = None,
 ) -> dict[str, Any]:
-    """Recent stored forecasts for ``metric``. Currently no jobs populate
-    ``mcp_forecasts`` yet (statsforecast and Forecast.Solar arrive in a
-    later PR); the function works, it just returns an empty list until
-    then."""
+    """Recent stored forecasts for ``metric`` over the next
+    ``horizon_hours`` hours. Read-only — rows are populated by the
+    ``forecast-solar`` (PV) and ``score-seasonal`` (statsforecast)
+    CronJobs."""
     horizon_hours = max(1, min(horizon_hours, 24 * 14))
     where = [
         "metric = %s",
