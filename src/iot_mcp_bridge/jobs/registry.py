@@ -71,13 +71,25 @@ class KnxJoinUseCase:
 
 @dataclass(frozen=True)
 class SeasonalModel:
-    """statsforecast MSTL+AutoARIMA target metric."""
+    """statsforecast MSTL+AutoARIMA target metric.
+
+    Univariate for now — train_seasonal fits one model per UC over the
+    last `lookback_days` of the named CAGG column. Exogenous variables
+    (outdoor temp for heating, etc.) are a follow-up once the framework
+    proves itself.
+
+    `forecast_horizon_hours` is how far the score-job projects on each
+    run. Stored alongside the model so a registry change doesn't break
+    in-flight forecasts mid-day.
+    """
 
     uc: str
     source_cagg: str
     metric: str
     season_length: tuple[int, ...] = (24, 168)
     lookback_days: int = 365
+    forecast_horizon_hours: int = 24
+    sigma_threshold: float = 3.0
     severity_floor: str = "info"
     warmup_days: int = 14
     silenced: bool = False
@@ -249,7 +261,17 @@ KNX_JOIN_USECASES: tuple[KnxJoinUseCase, ...] = (
     # need to remember to surface.
     KnxJoinUseCase(uc="window_while_heating"),
 )
-SEASONAL_MODELS: tuple[SeasonalModel, ...] = ()
+SEASONAL_MODELS: tuple[SeasonalModel, ...] = (
+    # Heating burner activity per hour — the most directly weather-
+    # sensitive signal in the house. With <2 years of data the model
+    # only learns daily + weekly seasonality (24 + 168); annual
+    # seasonality (8766) gets added once we have the data.
+    SeasonalModel(
+        uc="heating_activity_seasonal",
+        source_cagg="ems_esp_boiler_1h",
+        metric="heatingactive_samples",
+    ),
+)
 
 
 def all_slugs() -> set[str]:
