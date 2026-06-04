@@ -15,10 +15,12 @@ from starlette.routing import Mount, Route
 from . import auth as auth_module
 from . import db
 from . import metrics as metrics_module
+from . import nats as nats_module
 from .config import Settings, load_settings
 from .logging_setup import configure_logging, get_logger
 from .tools import domain as domain_tools
 from .tools import insights as insights_tools
+from .tools import live as live_tools
 from .tools import schema as schema_tools
 from .tools import timeseries as timeseries_tools
 
@@ -489,6 +491,63 @@ async def generate_insight_report(
     return result
 
 
+@mcp.tool()
+async def get_current_state(
+    domain: str,
+    identifier: str | None = None,
+) -> dict[str, Any]:
+    """Current state of a homelab domain, read live from NATS JetStream.
+
+    ``domain`` is one of ``knx`` | ``heating`` | ``dhw`` | ``solar`` |
+    ``wallbox``. ``knx`` needs an ``identifier`` group address (``"1/2/3"``);
+    ``solar`` accepts an optional inverter id (``"1"`` | ``"2"``).
+
+    Answers "what is X doing right now?" sub-second. Returns ``status: "ok"``
+    with the live ``state``, an ``as_of`` timestamp and a ``freshness_seconds``
+    age. Cyclic domains (heating/dhw/solar) add ``stale: true`` once the sensor
+    goes quiet; event-driven domains (knx/wallbox) report the age only — an old
+    value is still current. If the subject was never seen → ``status: "unknown"``
+    with ``last_known_in_tsdb`` from TimescaleDB.
+    """
+    log.info("tool_invoked", tool="get_current_state", domain=domain, identifier=identifier)
+    try:
+        result = await live_tools.get_current_state(
+            domain=domain, settings=_require_settings(), identifier=identifier
+        )
+    except Exception:
+        _record_tool_call("get_current_state", "error")
+        raise
+    _record_tool_call("get_current_state", "ok")
+    return result
+
+
+@mcp.tool()
+async def subscribe_nats(
+    subject: str,
+    duration_seconds: int = 10,
+) -> dict[str, Any]:
+    """Tail a NATS subject for a short window and return the collected messages.
+
+    Token-expensive — use only for "watch this for a moment" requests.
+    ``subject`` must start with a known stream prefix (``knx.`` | ``ems-esp.`` |
+    ``solaredge-1.`` | ``solaredge-2.`` | ``warp.``) and carry at least two
+    concrete tokens before any wildcard, so ``knx.>`` is rejected but
+    ``knx.1.2.3`` / ``knx.1.>`` are accepted. ``duration_seconds`` is capped at 30.
+    """
+    log.info(
+        "tool_invoked", tool="subscribe_nats", subject=subject, duration_seconds=duration_seconds
+    )
+    try:
+        result = await live_tools.subscribe_nats(
+            subject=subject, settings=_require_settings(), duration_seconds=duration_seconds
+        )
+    except Exception:
+        _record_tool_call("subscribe_nats", "error")
+        raise
+    _record_tool_call("subscribe_nats", "ok")
+    return result
+
+
 _settings: Settings | None = None
 
 
@@ -500,9 +559,13 @@ def _require_settings() -> Settings:
 
 
 async def _healthz(_request: Request) -> JSONResponse:
+    # DB is the critical dependency and gates the status code; NATS is reported
+    # for visibility but a transient blip must not flap the pod (live tools only).
     db_ok = await db.healthcheck()
-    status = 200 if db_ok else 503
-    return JSONResponse({"status": "ok" if db_ok else "degraded", "db": db_ok}, status_code=status)
+    body: dict[str, Any] = {"status": "ok" if db_ok else "degraded", "db": db_ok}
+    if _settings is not None and _settings.nats_enabled:
+        body["nats"] = await nats_module.healthcheck()
+    return JSONResponse(body, status_code=200 if db_ok else 503)
 
 
 async def _oauth_protected_resource(_request: Request) -> JSONResponse:
@@ -527,6 +590,8 @@ def build_app() -> Starlette:
         metrics_module.init()
         auth_module.configure(_settings)
         await db.init_pool(_settings)
+        if _settings.nats_enabled:
+            await nats_module.init(_settings)
         metrics_server = await metrics_module.serve(metrics_module.get(), _settings.metrics_port)
         log.info(
             "iot_mcp_bridge_ready",
@@ -534,6 +599,7 @@ def build_app() -> Starlette:
             port=_settings.port,
             metrics_port=_settings.metrics_port,
             auth_enabled=_settings.auth_enabled,
+            nats_enabled=_settings.nats_enabled,
         )
         try:
             async with mcp_app.lifespan(app):
@@ -541,6 +607,7 @@ def build_app() -> Starlette:
         finally:
             metrics_server.close()
             await metrics_server.wait_closed()
+            await nats_module.close()
             await db.close_pool()
 
     routes = [

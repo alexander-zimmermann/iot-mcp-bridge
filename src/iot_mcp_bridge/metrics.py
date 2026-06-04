@@ -45,6 +45,24 @@ class Metrics:
             ["result"],
             registry=self.registry,
         )
+        self.nats_fetches = Counter(
+            "iot_mcp_bridge_nats_fetches_total",
+            "Live-state JetStream reads partitioned by domain and result (ok|miss|error).",
+            ["domain", "result"],
+            registry=self.registry,
+        )
+        self.nats_state_age = Histogram(
+            "iot_mcp_bridge_nats_state_age_seconds",
+            "Freshness of the live state returned to the caller, by domain.",
+            ["domain"],
+            registry=self.registry,
+        )
+        self.nats_subscribe_messages = Counter(
+            "iot_mcp_bridge_nats_subscribe_messages_total",
+            "Messages collected by subscribe_nats, partitioned by subject prefix.",
+            ["prefix"],
+            registry=self.registry,
+        )
 
 
 _metrics: Metrics | None = None
