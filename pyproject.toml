@@ -1,6 +1,6 @@
 [project]
 name = "iot-mcp-bridge"
-version = "1.1.0"
+version = "1.2.0"
 description = "MCP server bridging homelab IoT data (KNX, EMS, WARP, SolarEdge) to Claude.ai via TimescaleDB"
 readme = "README.md"
 license = "GPL-2.0-or-later"
@@ -26,6 +26,7 @@ dependencies = [
     "httpx>=0.28.1",
     "cachetools>=7.1.4",
     "prometheus-client>=0.25.0",
+    "nats-py[nkeys]>=2.14.0",
 ]
 
 [project.optional-dependencies]
@@ -75,11 +76,12 @@ module = [
     "iot_mcp_bridge.tools.timeseries",
     "iot_mcp_bridge.tools.domain",
     "iot_mcp_bridge.tools.insights",
+    "iot_mcp_bridge.tools.live",
 ]
 disable_error_code = ["call-overload", "attr-defined", "index", "dict-item", "assignment", "arg-type"]
 
 [[tool.mypy.overrides]]
-module = ["fastmcp", "fastmcp.*", "testcontainers.*"]
+module = ["fastmcp", "fastmcp.*", "testcontainers.*", "nats", "nats.*"]
 ignore_missing_imports = true
 
 # Pylance/Pyright counterparts to the mypy overrides above — quiet the
