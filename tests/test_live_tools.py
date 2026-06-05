@@ -279,3 +279,60 @@ async def test_subscribe_accepts_sub_wildcard_and_collects(
     assert out["message_count"] == 2
     assert out["messages"][0]["data"] == {"value": True}
     assert out["messages"][0]["subject"] == "knx.1.2.3"
+
+
+# =====================================================================
+# get_current_knx — "what's on right now?" (catalog join + live values)
+# =====================================================================
+
+
+async def test_get_current_knx_only_active(
+    settings: Settings, db_pool: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Seeded catalog: 1/2/2 = Lighting Bedroom, 1/2/100 = Lighting LivingRoom.
+    _patch_last_msg(
+        monkeypatch,
+        {
+            "knx.1.2.2": _msg("knx.1.2.2", {"value": True}),  # bedroom ceiling ON
+            "knx.1.2.100": _msg("knx.1.2.100", {"value": False}),  # living-room ceiling OFF
+        },
+    )
+    out = await live.get_current_knx(settings, function="Lighting", only_active=True)
+    assert out["count"] == 1
+    assert out["states"][0]["ga"] == "1/2/2"
+    assert out["states"][0]["value"] is True
+    assert out["states"][0]["room"] == "Bedroom"
+    assert out["states"][0]["age_seconds"] < 5
+
+
+async def test_get_current_knx_lists_all_matching(
+    settings: Settings, db_pool: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _patch_last_msg(
+        monkeypatch,
+        {
+            "knx.1.2.2": _msg("knx.1.2.2", {"value": True}),
+            "knx.1.2.100": _msg("knx.1.2.100", {"value": False}),
+        },
+    )
+    out = await live.get_current_knx(settings, function="Lighting")
+    assert out["count"] == 2
+    assert {s["ga"] for s in out["states"]} == {"1/2/2", "1/2/100"}
+
+
+async def test_get_current_knx_omits_gas_without_nats(
+    settings: Settings, db_pool: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _patch_last_msg(monkeypatch, {"knx.1.2.2": _msg("knx.1.2.2", {"value": True})})
+    out = await live.get_current_knx(settings, function="Lighting")
+    assert out["count"] == 1  # 1/2/100 has no retained NATS message → omitted
+    assert out["states"][0]["ga"] == "1/2/2"
+
+
+async def test_get_current_knx_no_catalog_match(
+    settings: Settings, db_pool: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _patch_last_msg(monkeypatch, {})
+    out = await live.get_current_knx(settings, room="Nonexistent")
+    assert out["count"] == 0
+    assert out["states"] == []
