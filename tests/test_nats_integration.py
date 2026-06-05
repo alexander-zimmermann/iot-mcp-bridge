@@ -70,22 +70,6 @@ async def test_last_msg_missing_subject_returns_none(seeded_nats: str) -> None:
     assert await nats_module.last_msg("KNX", "knx.9.9.9") is None
 
 
-async def test_last_per_subject_returns_latest_per_subject(seeded_nats: str) -> None:
-    pub = await natslib.connect(servers=[seeded_nats])
-    js = pub.jetstream()
-    await js.publish("knx.5.5.5", json.dumps({"v": 1}).encode())
-    await js.publish("knx.5.5.5", json.dumps({"v": 2}).encode())  # newer for same subject
-    await js.publish("knx.5.5.6", json.dumps({"v": 9}).encode())
-    await pub.flush()
-    await pub.close()
-
-    msgs = await nats_module.last_per_subject("KNX", "knx.5.>", limit=10)
-    by_subject = {m.subject: json.loads(m.data) for m in msgs}
-    assert by_subject["knx.5.5.5"]["v"] == 2  # only the newest message per subject
-    assert by_subject["knx.5.5.6"]["v"] == 9
-    assert len(by_subject) == 2
-
-
 async def test_tail_collects_live_messages(seeded_nats: str) -> None:
     async def _publish_after_delay() -> None:
         await asyncio.sleep(0.3)

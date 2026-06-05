@@ -548,6 +548,49 @@ async def subscribe_nats(
     return result
 
 
+@mcp.tool()
+async def get_current_knx(
+    room: str | None = None,
+    function: str | None = None,
+    name: str | None = None,
+    only_active: bool = False,
+    limit: int = 200,
+) -> dict[str, Any]:
+    """Current value of KNX group addresses matching a filter, read live from NATS.
+
+    Use this — not ``query_knx_events`` — for "is the living-room light on right
+    now?" / "which lights are on?". It reads the last retained value per group
+    address from JetStream, so it also covers GAs that publish only on change
+    (lights, switches) and would be missing from a recent event-log window.
+
+    Filters (optional, AND-combined) resolve GAs via the catalog: ``room``
+    (exact), ``function`` (exact, e.g. ``"Beleuchtung"``), ``name`` (substring).
+    ``only_active=True`` returns only GAs whose current value is "on".
+    """
+    log.info(
+        "tool_invoked",
+        tool="get_current_knx",
+        room=room,
+        function=function,
+        name=name,
+        only_active=only_active,
+    )
+    try:
+        result = await live_tools.get_current_knx(
+            settings=_require_settings(),
+            room=room,
+            function=function,
+            name=name,
+            only_active=only_active,
+            limit=limit,
+        )
+    except Exception:
+        _record_tool_call("get_current_knx", "error")
+        raise
+    _record_tool_call("get_current_knx", "ok")
+    return result
+
+
 _settings: Settings | None = None
 
 

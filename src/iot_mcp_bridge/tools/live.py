@@ -14,6 +14,7 @@ the raw ``freshness_seconds`` age and let the caller judge.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from collections.abc import Awaitable, Callable
@@ -353,6 +354,126 @@ def _validate_subscribe_subject(subject: str) -> None:
                     f"wildcard_too_broad: {subject!r}; need >=2 concrete tokens before a wildcard"
                 )
             break
+
+
+# =====================================================================
+# get_current_knx — "what's on right now?" across many group addresses
+# =====================================================================
+
+
+async def get_current_knx(
+    settings: Settings,
+    room: str | None = None,
+    function: str | None = None,
+    name: str | None = None,
+    only_active: bool = False,
+    limit: int = 200,
+) -> dict[str, Any]:
+    """Current value of KNX group addresses matching a filter, read live from NATS.
+
+    Answers "is the living-room light on right now?" / "which lights are on?" —
+    use this instead of ``query_knx_events`` for *current* state. It reads the
+    last retained value per group address from JetStream, so it works even for
+    GAs that only publish on change (lights, switches) and would be missing from
+    a recent event-log window.
+
+    Filters (all optional, AND-combined) resolve the relevant GAs via the
+    catalog: ``room`` (exact), ``function`` (exact, e.g. ``"Beleuchtung"``),
+    ``name`` (substring, ``ILIKE``). ``only_active=True`` keeps only GAs whose
+    current value is "on" (boolean true or a number > 0). GAs with no retained
+    NATS message are omitted.
+    """
+    if limit <= 0:
+        raise ValueError(f"invalid_limit: {limit}")
+    effective_limit = min(limit, settings.query_row_limit)
+
+    where: list[str] = []
+    params: list[Any] = []
+    if room is not None:
+        where.append("room = %s")
+        params.append(room)
+    if function is not None:
+        where.append("function = %s")
+        params.append(function)
+    if name is not None:
+        where.append("name ILIKE %s")
+        params.append(f"%{name}%")
+    clause = (" WHERE " + " AND ".join(where)) if where else ""
+    params.append(effective_limit)
+    catalog_sql = (
+        f"SELECT ga, name AS ga_name, room, function, dpt FROM ga_catalog{clause} "
+        "ORDER BY ga LIMIT %s"
+    )
+
+    metrics_module.get().db_queries.labels(tool="get_current_knx", table_used="ga_catalog").inc()
+    async with connection() as conn:
+        catalog = await (await conn.execute(catalog_sql, params)).fetchall()
+
+    filter_used = {"room": room, "function": function, "name": name, "only_active": only_active}
+    if not catalog:
+        return {
+            "count": 0,
+            "filter": filter_used,
+            "states": [],
+            "note": "no group addresses match the filter; check room/function/name first",
+        }
+
+    by_ga = await _knx_last_values([row["ga"] for row in catalog])
+    metrics_module.get().nats_fetches.labels(domain="knx", result="ok").inc()
+
+    states: list[dict[str, Any]] = []
+    for row in catalog:
+        current = by_ga.get(row["ga"])
+        if current is None:
+            continue  # never retained on NATS
+        value, ts = current
+        if only_active and not _is_on(value):
+            continue
+        states.append(
+            {
+                "ga": row["ga"],
+                "name": row["ga_name"],
+                "room": row["room"],
+                "function": row["function"],
+                "value": value,
+                "age_seconds": round(_age_seconds(ts), 1),
+            }
+        )
+        if len(states) >= effective_limit:
+            break
+
+    return {
+        "count": len(states),
+        "filter": filter_used,
+        "states": states,
+        "note": "current value per GA from NATS (last message); GAs without one are omitted",
+    }
+
+
+async def _knx_last_values(gas: list[str]) -> dict[str, tuple[Any, datetime]]:
+    """Map each ga (`m/h/s`) → (current value, timestamp) via per-GA get_last_msg.
+
+    One direct JetStream read per GA (no consumer, no ack), run concurrently —
+    works with the MCP server's subscribe-only nkey ($JS.API + _INBOX, no $JS.ACK).
+    """
+
+    async def _one(ga: str) -> tuple[str, nats_module.StateMsg | None]:
+        return ga, await nats_module.last_msg("KNX", "knx." + ga.replace("/", "."))
+
+    results = await asyncio.gather(*[_one(ga) for ga in gas])
+    out: dict[str, tuple[Any, datetime]] = {}
+    for ga, msg in results:
+        if msg is not None:
+            out[ga] = (_payload(msg).get("value"), msg.ts)
+    return out
+
+
+def _is_on(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int | float):
+        return value > 0
+    return False
 
 
 # =====================================================================
