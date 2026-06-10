@@ -82,9 +82,7 @@ async def test_detect_anomalies_returns_all_recent(
 async def test_detect_anomalies_filter_by_severity(
     settings: Settings, seeded_anomalies: None
 ) -> None:
-    result = await insights.detect_anomalies(
-        settings=settings, severity="critical", since="1 day"
-    )
+    result = await insights.detect_anomalies(settings=settings, severity="critical", since="1 day")
     assert result["row_count"] == 2
     assert all(r["severity"] == "critical" for r in result["rows"])
 
@@ -107,9 +105,7 @@ async def test_detect_anomalies_rejects_invalid_severity(settings: Settings) -> 
         await insights.detect_anomalies(settings=settings, severity="bogus")
 
 
-async def test_detect_anomalies_limit_capped(
-    settings: Settings, seeded_anomalies: None
-) -> None:
+async def test_detect_anomalies_limit_capped(settings: Settings, seeded_anomalies: None) -> None:
     result = await insights.detect_anomalies(settings=settings, limit=3, since="1 day")
     assert result["row_count"] == 3
 
@@ -122,9 +118,7 @@ async def test_detect_anomalies_limit_capped(
 async def test_explain_anomaly_returns_row_and_context(
     settings: Settings, seeded_anomalies: None
 ) -> None:
-    listing = await insights.detect_anomalies(
-        settings=settings, severity="critical", since="1 day"
-    )
+    listing = await insights.detect_anomalies(settings=settings, severity="critical", since="1 day")
     target = listing["rows"][0]
     result = await insights.explain_anomaly(
         settings=settings,
@@ -154,9 +148,7 @@ async def test_explain_anomaly_not_found(settings: Settings, db_pool: None) -> N
 # =====================================================================
 
 
-async def test_get_forecast_returns_seeded_rows(
-    settings: Settings, seeded_anomalies: None
-) -> None:
+async def test_get_forecast_returns_seeded_rows(settings: Settings, seeded_anomalies: None) -> None:
     result = await insights.get_forecast(settings=settings, metric="pv_production_avg")
     assert result["metric"] == "pv_production_avg"
     assert result["row_count"] == 4

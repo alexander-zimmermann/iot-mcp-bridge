@@ -55,7 +55,7 @@ async def detect_anomalies(
         SELECT time, created_at, source, metric, detector, severity, uc,
                actual, expected, score, payload
         FROM mcp_anomalies
-        WHERE {' AND '.join(where)}
+        WHERE {" AND ".join(where)}
         ORDER BY time DESC
         LIMIT %s
     """
@@ -146,7 +146,7 @@ async def get_forecast(
         SELECT forecast_for, created_at, source, metric, model,
                forecast_value, forecast_lower, forecast_upper
         FROM mcp_forecasts
-        WHERE {' AND '.join(where)}
+        WHERE {" AND ".join(where)}
         ORDER BY forecast_for, model
     """
 
