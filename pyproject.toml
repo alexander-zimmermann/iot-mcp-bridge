@@ -56,7 +56,9 @@ line-length = 100
 target-version = "py314"
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "I", "N", "UP", "B", "A", "C4", "RET", "SIM", "ARG"]
+# D100/D104 pin the module/package docstring convention; the rest of the D
+# family is intentionally off (per-function docstrings are judged in review).
+select = ["E", "F", "W", "I", "N", "UP", "B", "A", "C4", "RET", "SIM", "ARG", "D100", "D104", "RUF100"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["ARG001"]  # pytest fixtures injected for setup side-effects
@@ -81,7 +83,7 @@ module = [
 disable_error_code = ["call-overload", "attr-defined", "index", "dict-item", "assignment", "arg-type"]
 
 [[tool.mypy.overrides]]
-module = ["fastmcp", "fastmcp.*", "testcontainers.*", "nats", "nats.*"]
+module = ["fastmcp", "fastmcp.*", "nats", "nats.*"]
 ignore_missing_imports = true
 
 # Pylance/Pyright counterparts to the mypy overrides above — quiet the
