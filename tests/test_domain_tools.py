@@ -1,3 +1,5 @@
+"""Domain-tool tests against the seeded TimescaleDB container."""
+
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
@@ -158,6 +160,12 @@ async def test_knx_events_functions_filter(settings: Settings, db_pool: None) ->
         f, t, settings=settings, functions=["Sensors"], limit=500
     )
     assert all(r["function"] == "Sensors" for r in out["rows"])
+
+
+async def test_knx_events_rejects_unknown_function(settings: Settings, db_pool: None) -> None:
+    f, t = _now_window()
+    with pytest.raises(ValueError, match="unknown_functions.*Bogus"):
+        await domain_tools.query_knx_events(f, t, settings=settings, functions=["Bogus"])
 
 
 async def test_knx_events_name_filter(settings: Settings, db_pool: None) -> None:

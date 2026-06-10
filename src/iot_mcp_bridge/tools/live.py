@@ -56,6 +56,11 @@ _SUBSCRIBE_MAX_MESSAGES = 200
 #    (a V/A/W-per-phase array; indices 6..8 are the three phase powers).
 _WALLBOX_STATE_SUBJECT = "warp.evse.state"
 _WALLBOX_POWER_SUBJECT = "warp.meters.0.values"
+# get_current_knx resolves one JetStream read per matching GA; the semaphore
+# keeps a broad filter (up to query_row_limit GAs) from opening thousands of
+# concurrent requests against the NATS server at once.
+_LAST_VALUE_CONCURRENCY = 20
+
 _WALLBOX_STATE_FIELDS = (
     "charger_state",
     "iec61851_state",
@@ -296,7 +301,7 @@ async def _tsdb_fallback(domain: str, identifier: str | None) -> dict[str, Any] 
     try:
         async with connection() as conn:
             row = await (await conn.execute(stmt, params)).fetchone()
-    except Exception as exc:  # noqa: BLE001 — fallback is best-effort
+    except Exception as exc:  # fallback is best-effort
         log.warning("tsdb_fallback_failed", domain=domain, error=str(exc))
         return None
     return _serialize_row(row) if row else None
@@ -453,12 +458,15 @@ async def get_current_knx(
 async def _knx_last_values(gas: list[str]) -> dict[str, tuple[Any, datetime]]:
     """Map each ga (`m/h/s`) → (current value, timestamp) via per-GA get_last_msg.
 
-    One direct JetStream read per GA (no consumer, no ack), run concurrently —
-    works with the MCP server's subscribe-only nkey ($JS.API + _INBOX, no $JS.ACK).
+    One direct JetStream read per GA (no consumer, no ack), run concurrently
+    but bounded by ``_LAST_VALUE_CONCURRENCY`` — works with the MCP server's
+    subscribe-only nkey ($JS.API + _INBOX, no $JS.ACK).
     """
+    sem = asyncio.Semaphore(_LAST_VALUE_CONCURRENCY)
 
     async def _one(ga: str) -> tuple[str, nats_module.StateMsg | None]:
-        return ga, await nats_module.last_msg("KNX", "knx." + ga.replace("/", "."))
+        async with sem:
+            return ga, await nats_module.last_msg("KNX", "knx." + ga.replace("/", "."))
 
     results = await asyncio.gather(*[_one(ga) for ga in gas])
     out: dict[str, tuple[Any, datetime]] = {}

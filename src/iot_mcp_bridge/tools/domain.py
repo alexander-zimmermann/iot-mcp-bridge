@@ -185,12 +185,21 @@ async def query_heating_cycles(
 # =====================================================================
 
 _DISTINCT_ROOMS_SQL = "SELECT DISTINCT room FROM ga_catalog WHERE room IS NOT NULL ORDER BY room"
+_DISTINCT_FUNCTIONS_SQL = (
+    "SELECT DISTINCT function FROM ga_catalog WHERE function IS NOT NULL ORDER BY function"
+)
 
 
 async def _known_rooms() -> list[str]:
     async with connection() as conn:
         rows = await (await conn.execute(_DISTINCT_ROOMS_SQL)).fetchall()
     return [r["room"] for r in rows]
+
+
+async def _known_functions() -> list[str]:
+    async with connection() as conn:
+        rows = await (await conn.execute(_DISTINCT_FUNCTIONS_SQL)).fetchall()
+    return [r["function"] for r in rows]
 
 
 async def query_room_climate(
@@ -294,6 +303,12 @@ async def query_knx_events(
     if limit <= 0:
         raise ValueError(f"invalid_limit: {limit}")
     effective_limit = min(limit, settings.query_row_limit)
+
+    if functions:
+        valid_functions = await _known_functions()
+        unknown = sorted(set(functions) - set(valid_functions))
+        if unknown:
+            raise ValueError(f"unknown_functions: {unknown}; valid: {valid_functions}")
 
     where_parts: list[sql.Composable] = [sql.SQL("time BETWEEN %s AND %s")]
     params: list[Any] = [from_ts, to_ts]
