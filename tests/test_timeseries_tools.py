@@ -1,3 +1,5 @@
+"""query_timeseries tests: validation, CAGG routing, row cap."""
+
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta

@@ -37,11 +37,29 @@ behind high-level questions:
 | `query_energy_flow(from_ts, to_ts, bucket)`           | One row per bucket joining PV production, grid, household consumer, battery net, and wallbox power. Reads the hourly continuous aggregates; bucket must be `1 hour` or coarser.       |
 | `query_heating_cycles(from_ts, to_ts, …)`             | Detects ON/OFF burner cycles from `ems_esp` (`topic = 'boiler_data'`) via `LAG` window functions. Returns one row per cycle with start, end, duration, peak and average burner power. |
 | `query_room_climate(room, from_ts, to_ts, bucket)`    | Bucketed temp/humidity/etc. per GA name within a room. `room` is whitelisted against the imported KNX catalog so unknown rooms produce a precise error the LLM can self-correct.      |
-| `query_knx_events(from_ts, to_ts, room, ga, name, …)` | Raw event log against the `ga_catalog_view` view; supports room/ga/name predicates with a default limit of 200.                                                                      |
+| `query_knx_events(from_ts, to_ts, room, ga, name, …)` | Raw event log against the `ga_catalog_view` view; supports room/ga/name/functions predicates with a default limit of 200.                                                            |
+| `query_unifi_events(from_ts, to_ts, camera, …)`       | Recent UniFi Protect Alarm Manager events (person/vehicle/motion detections per camera) for security review.                                                                          |
 | `correlate_events(source_a, source_b, …)`             | Lagged Pearson correlation between two time-series streams. Each `source` is `{table, column}`; returns the best lag plus the top 10 by `\|corr\|`.                                   |
 
-Later phases (tracked separately) add anomaly detection, live state via NATS,
-optimization advisors, and approval-gated control.
+**Insights** (read-only views into the anomaly/forecast tables populated by [iot-insights-engine](https://github.com/alexander-zimmermann/iot-insights-engine) batch jobs)
+
+| Tool                                            | What it does                                                                                       |
+| ----------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| `detect_anomalies(source, severity, uc, …)`     | Recent anomaly rows, newest first, filterable by source/severity/use-case.                         |
+| `explain_anomaly(time, source, metric, …)`      | One anomaly by composite key plus the surrounding context window of the same (source, metric).     |
+| `get_forecast(metric, horizon_hours, model)`    | Stored model forecasts (PV via Forecast.Solar, seasonal via statsforecast).                        |
+| `generate_insight_report(timeframe, top_n)`     | Aggregate anomaly summary (severity counts, top use-cases, recent serious entries) for a digest.   |
+
+**Live** (current state straight from NATS JetStream; requires `MCP_NATS_ENABLED=true`)
+
+| Tool                                          | What it does                                                                                                  |
+| --------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `get_current_state(domain, identifier)`       | Last retained message for a domain (`knx`/`heating`/`dhw`/`solar`/`wallbox`) with freshness metadata.         |
+| `get_current_knx(room, function, name, …)`    | Current value per matching KNX group address — answers "which lights are on right now?".                      |
+| `subscribe_nats(subject, duration_seconds)`   | Tails an allowlisted NATS subject for a short bounded window.                                                  |
+
+Later phases (tracked separately) add optimization advisors and
+approval-gated control.
 
 ## Standalone usage
 
@@ -64,8 +82,10 @@ uv sync
 export MCP_DB_HOST=localhost
 export MCP_DB_PORT=5432
 export MCP_DB_NAME=mydb
-export MCP_DB_USER=mcp_readonly
+export MCP_DB_USERNAME=mcp_readonly
 export MCP_DB_PASSWORD=secret
+# The live tools default to an in-cluster NATS URL — disable them standalone:
+export MCP_NATS_ENABLED=false
 
 uv run iot-mcp-bridge
 # server listening on http://0.0.0.0:8080/mcp
@@ -73,7 +93,7 @@ uv run iot-mcp-bridge
 
 ### Connect Claude.ai
 
-Open Claude.ai → Settings → Connectors → "Add custom connector" → URL `http://localhost:8080/mcp` (or wherever you exposed the server). Start a chat and ask "what data sources do you have?" — the connector will surface the three tools.
+Open Claude.ai → Settings → Connectors → "Add custom connector" → URL `http://localhost:8080/mcp` (or wherever you exposed the server). Start a chat and ask "what data sources do you have?" — the connector will surface the tools listed above.
 
 For a production deployment, put the server behind TLS and an authenticating proxy (or enable the built-in Authentik OAuth + JWKS validation, see configuration below).
 
@@ -81,26 +101,43 @@ For a production deployment, put the server behind TLS and an authenticating pro
 
 All settings are environment variables, prefixed with `MCP_`:
 
-| Variable              | Default    | Purpose                                         |
-| --------------------- | ---------- | ----------------------------------------------- |
-| `MCP_HOST`            | `0.0.0.0`  | Bind address                                    |
-| `MCP_PORT`            | `8080`     | Bind port                                       |
-| `MCP_LOG_LEVEL`       | `INFO`     | structlog level                                 |
-| `MCP_LOG_FORMAT`      | `json`     | `json` or `console`                             |
-| `MCP_DB_HOST`         | _required_ | Postgres host                                   |
-| `MCP_DB_PORT`         | `5432`     | Postgres port                                   |
-| `MCP_DB_NAME`         | _required_ | Database name                                   |
-| `MCP_DB_USER`         | _required_ | Read-only role                                  |
-| `MCP_DB_PASSWORD`     | _required_ | Password                                        |
-| `MCP_DB_POOL_MIN`     | `2`        | psycopg pool min size                           |
-| `MCP_DB_POOL_MAX`     | `10`       | psycopg pool max size                           |
-| `MCP_QUERY_ROW_LIMIT` | `5000`     | Hard cap on rows returned by `query_timeseries` |
-| `MCP_AUTH_ENABLED`    | `false`    | Enable Bearer-token validation                  |
-| `MCP_AUTH_JWKS_URL`   | —          | JWKS endpoint when auth is enabled              |
-| `MCP_AUTH_ISSUER`     | —          | Expected `iss` claim                            |
-| `MCP_AUTH_AUDIENCE`   | —          | Expected `aud` claim                            |
+| Variable                             | Default                     | Purpose                                                        |
+| ------------------------------------ | --------------------------- | --------------------------------------------------------------- |
+| `MCP_HOST`                           | `0.0.0.0`                   | Bind address                                                   |
+| `MCP_PORT`                           | `8080`                      | Bind port                                                      |
+| `MCP_LOG_LEVEL`                      | `INFO`                      | structlog level                                                |
+| `MCP_LOG_FORMAT`                     | `json`                      | `json` or `console`                                            |
+| `MCP_DB_HOST`                        | _required_                  | Postgres host                                                  |
+| `MCP_DB_PORT`                        | `5432`                      | Postgres port                                                  |
+| `MCP_DB_NAME`                        | _required_                  | Database name                                                  |
+| `MCP_DB_USERNAME`                    | _required_                  | Read-only role                                                 |
+| `MCP_DB_PASSWORD`                    | _required_                  | Password                                                       |
+| `MCP_DB_USERNAME_FILE`               | —                           | Read role from a mounted file (overrides `MCP_DB_USERNAME`)    |
+| `MCP_DB_PASSWORD_FILE`               | —                           | Read password from a mounted file (overrides `MCP_DB_PASSWORD`) |
+| `MCP_DB_POOL_MIN`                    | `2`                         | psycopg pool min size                                          |
+| `MCP_DB_POOL_MAX`                    | `10`                        | psycopg pool max size                                          |
+| `MCP_QUERY_ROW_LIMIT`                | `5000`                      | Hard cap on rows returned by the query tools                   |
+| `MCP_METRICS_PORT`                   | `9090`                      | Prometheus `/metrics` port                                     |
+| `MCP_AUTH_ENABLED`                   | `false`                     | Enable Bearer-token validation                                 |
+| `MCP_AUTH_JWKS_URL`                  | —                           | JWKS endpoint when auth is enabled                             |
+| `MCP_AUTH_ISSUER`                    | —                           | Expected `iss` claim                                           |
+| `MCP_AUTH_AUDIENCE`                  | —                           | Expected `aud` claim                                           |
+| `MCP_AUTH_JWKS_TTL_SECONDS`          | `3600`                      | JWKS cache lifetime                                            |
+| `MCP_AUTH_JWKS_MIN_REFRESH_SECONDS`  | `30`                        | Cooldown between JWKS fetch attempts                           |
+| `MCP_AUTH_RESOURCE_URL`              | —                           | Public URL for RFC 9728 protected-resource metadata            |
+| `MCP_NATS_ENABLED`                   | `true`                      | Enable the live tools (NATS JetStream)                         |
+| `MCP_NATS_SERVERS`                   | `nats://nats.nats.svc:4222` | Comma-separated NATS server URLs                               |
+| `MCP_NATS_NKEY_SEED_FILE`            | —                           | nkey seed file for NATS auth (anonymous when unset)            |
+| `MCP_LIVE_STALE_SECONDS`             | `600`                       | Age after which cyclic live state is flagged `stale`           |
+| `MCP_SUBSCRIBE_MAX_SECONDS`          | `30`                        | Hard cap for `subscribe_nats` windows                          |
 
 When `MCP_AUTH_ENABLED=true`, every request must carry a valid OIDC Bearer token signed by the configured JWKS. Tested against [Authentik](https://goauthentik.io/) but works with any OIDC-compliant authorization server.
+
+### Operational endpoints
+
+- `GET /livez` — liveness: process is up; never depends on DB/NATS health.
+- `GET /healthz` — readiness/deep health: 503 when the database is unreachable; reports NATS connectivity when the live tools are enabled.
+- `GET :9090/metrics` — Prometheus metrics (tool calls, DB query durations, JWKS refreshes, NATS fetches).
 
 ### Container image
 
@@ -110,34 +147,28 @@ Multi-arch images are published on every release tag:
 docker run --rm -p 8080:8080 \
   -e MCP_DB_HOST=host.docker.internal \
   -e MCP_DB_NAME=mydb \
-  -e MCP_DB_USER=mcp_readonly \
+  -e MCP_DB_USERNAME=mcp_readonly \
   -e MCP_DB_PASSWORD=secret \
+  -e MCP_NATS_ENABLED=false \
   ghcr.io/alexander-zimmermann/iot-mcp-bridge:latest
 ```
 
 ## GA catalog
 
-The domain tools (`query_room_climate`, `query_knx_events`) need a Postgres
-`ga_catalog` table that maps each KNX group address to a name, room,
-function, and description. The catalog is generated from the ETS `.knxproj`
-file by `knx-nats-bridge`, distributed as a ConfigMap, and imported into
-Postgres by the bundled `iot-mcp-bridge-import-ga-catalog` CLI:
-
-```bash
-uv run python -m iot_mcp_bridge.cli.import_ga_catalog \
-    --catalog-path /etc/iot-mcp-bridge/ga-catalog.yaml
-```
-
-The CLI uses `MCP_DB_*` env vars for the connection (admin role required —
-the read-only role used by the server cannot write) and is idempotent:
-re-runs only update rows whose fields actually changed and purge rows whose
-GA is no longer in the YAML.
+The domain tools (`query_room_climate`, `query_knx_events`, `get_current_knx`)
+need a Postgres `ga_catalog` table that maps each KNX group address to a name,
+room, function, and description. The catalog is generated from the ETS
+`.knxproj` file by
+[knx-nats-bridge](https://github.com/alexander-zimmermann/knx-nats-bridge),
+which also ships the import job that writes it into Postgres (the importer
+was moved there when this repo was slimmed down to the MCP server itself).
 
 ## Development
 
 ```bash
 uv sync --extra dev
 uv run ruff check .
+uv run ruff format --check .
 uv run mypy src
 uv run pytest -q
 ```
