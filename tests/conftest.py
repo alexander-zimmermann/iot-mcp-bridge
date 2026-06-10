@@ -1,7 +1,9 @@
+"""Shared fixtures: a seeded TimescaleDB testcontainer, settings, and the DB pool."""
+
 from __future__ import annotations
 
 import os
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
 
 import psycopg
 import pytest
@@ -10,13 +12,21 @@ from testcontainers.postgres import PostgresContainer
 
 from iot_mcp_bridge import db
 from iot_mcp_bridge.config import Settings
+from iot_mcp_bridge.tools import schema as schema_tools
+
+
+@pytest.fixture(autouse=True)
+def _fresh_sources_cache() -> None:
+    """Drop the data-source catalog TTL cache so tests stay order-independent."""
+    schema_tools.invalidate_cache()
+
 
 # TimescaleDB image with the extension preinstalled.
 TIMESCALEDB_IMAGE = "timescale/timescaledb:latest-pg17"
 
 
 @pytest.fixture(scope="session")
-def timescaledb_container() -> PostgresContainer:
+def timescaledb_container() -> Iterator[PostgresContainer]:
     container = PostgresContainer(
         TIMESCALEDB_IMAGE, username="test", password="test", dbname="homelab"
     )
