@@ -1,6 +1,18 @@
+"""MCP server wiring: tool registration, HTTP app factory, and lifespan.
+
+Docstring convention: the ``@mcp.tool()`` docstrings in this module ARE the
+tool descriptions served to the LLM over MCP — they are the API contract and
+must stay accurate and self-contained. The docstrings on the implementations
+in ``tools/*`` document internals for developers and must not be relied on
+by clients.
+
+The app is exposed via :func:`build_app` (uvicorn factory) so importing this
+module has no side effects — settings are only loaded when the app is built.
+"""
+
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -38,6 +50,17 @@ def _record_tool_call(tool: str, outcome: str) -> None:
     metrics_module.get().tool_calls.labels(tool=tool, sub=_principal_sub(), outcome=outcome).inc()
 
 
+async def _instrumented[T](tool: str, call: Awaitable[T]) -> T:
+    """Await ``call``, recording the per-tool ok/error metric."""
+    try:
+        result = await call
+    except Exception:
+        _record_tool_call(tool, "error")
+        raise
+    _record_tool_call(tool, "ok")
+    return result
+
+
 @mcp.tool()
 async def list_data_sources() -> list[dict[str, Any]]:
     """List hypertables and continuous aggregates with their time range.
@@ -46,13 +69,7 @@ async def list_data_sources() -> list[dict[str, Any]]:
     ``get_schema`` or ``query_timeseries``.
     """
     log.info("tool_invoked", tool="list_data_sources")
-    try:
-        result = await schema_tools.list_data_sources()
-    except Exception:
-        _record_tool_call("list_data_sources", "error")
-        raise
-    _record_tool_call("list_data_sources", "ok")
-    return result
+    return await _instrumented("list_data_sources", schema_tools.list_data_sources())
 
 
 @mcp.tool()
@@ -64,13 +81,7 @@ async def get_schema(table: str) -> dict[str, Any]:
     ``raw->>'<key>'`` expressions.
     """
     log.info("tool_invoked", tool="get_schema", table=table)
-    try:
-        result = await schema_tools.get_schema(table)
-    except Exception:
-        _record_tool_call("get_schema", "error")
-        raise
-    _record_tool_call("get_schema", "ok")
-    return result
+    return await _instrumented("get_schema", schema_tools.get_schema(table))
 
 
 @mcp.tool()
@@ -100,8 +111,9 @@ async def query_timeseries(
         bucket=bucket,
         aggregation=aggregation,
     )
-    try:
-        result = await timeseries_tools.query_timeseries(
+    return await _instrumented(
+        "query_timeseries",
+        timeseries_tools.query_timeseries(
             table=table,
             columns=columns,
             from_ts=from_ts,
@@ -110,12 +122,8 @@ async def query_timeseries(
             aggregation=aggregation,  # type: ignore[arg-type]
             bucket=bucket,
             filters=filters,
-        )
-    except Exception:
-        _record_tool_call("query_timeseries", "error")
-        raise
-    _record_tool_call("query_timeseries", "ok")
-    return result
+        ),
+    )
 
 
 @mcp.tool()
@@ -130,15 +138,12 @@ async def query_energy_flow(
     ``warp_meter_1h``. Bucket must be ``1 hour`` or coarser.
     """
     log.info("tool_invoked", tool="query_energy_flow", bucket=bucket)
-    try:
-        result = await domain_tools.query_energy_flow(
+    return await _instrumented(
+        "query_energy_flow",
+        domain_tools.query_energy_flow(
             from_ts=from_ts, to_ts=to_ts, settings=_require_settings(), bucket=bucket
-        )
-    except Exception:
-        _record_tool_call("query_energy_flow", "error")
-        raise
-    _record_tool_call("query_energy_flow", "ok")
-    return result
+        ),
+    )
 
 
 @mcp.tool()
@@ -154,18 +159,15 @@ async def query_heating_cycles(
     end, duration, peak and average burner power.
     """
     log.info("tool_invoked", tool="query_heating_cycles")
-    try:
-        result = await domain_tools.query_heating_cycles(
+    return await _instrumented(
+        "query_heating_cycles",
+        domain_tools.query_heating_cycles(
             from_ts=from_ts,
             to_ts=to_ts,
             settings=_require_settings(),
             min_duration_seconds=min_duration_seconds,
-        )
-    except Exception:
-        _record_tool_call("query_heating_cycles", "error")
-        raise
-    _record_tool_call("query_heating_cycles", "ok")
-    return result
+        ),
+    )
 
 
 @mcp.tool()
@@ -184,20 +186,17 @@ async def query_room_climate(
     is in the given list.
     """
     log.info("tool_invoked", tool="query_room_climate", room=room, bucket=bucket)
-    try:
-        result = await domain_tools.query_room_climate(
+    return await _instrumented(
+        "query_room_climate",
+        domain_tools.query_room_climate(
             room=room,
             from_ts=from_ts,
             to_ts=to_ts,
             settings=_require_settings(),
             bucket=bucket,
             functions=functions,
-        )
-    except Exception:
-        _record_tool_call("query_room_climate", "error")
-        raise
-    _record_tool_call("query_room_climate", "ok")
-    return result
+        ),
+    )
 
 
 @mcp.tool()
@@ -218,8 +217,10 @@ async def query_knx_events(
     * ``ga``        — exact GA match (``"4/2/161"``)
     * ``name``      — substring match against ``ga_name`` (``ILIKE``);
                       pass partial words like ``"Beleuchtung"``
-    * ``functions`` — list of ETS function names; combine with ``room``
-                      to narrow to e.g. all lighting events in a room
+    * ``functions`` — list of ETS function names, validated against the
+                      catalog (unknown names error with the valid list);
+                      combine with ``room`` to narrow to e.g. all lighting
+                      events in a room
 
     Default ``limit`` 200; effective cap ``min(limit, query_row_limit)``.
     """
@@ -232,8 +233,9 @@ async def query_knx_events(
         functions=functions,
         limit=limit,
     )
-    try:
-        result = await domain_tools.query_knx_events(
+    return await _instrumented(
+        "query_knx_events",
+        domain_tools.query_knx_events(
             from_ts=from_ts,
             to_ts=to_ts,
             settings=_require_settings(),
@@ -242,12 +244,8 @@ async def query_knx_events(
             name=name,
             functions=functions,
             limit=limit,
-        )
-    except Exception:
-        _record_tool_call("query_knx_events", "error")
-        raise
-    _record_tool_call("query_knx_events", "ok")
-    return result
+        ),
+    )
 
 
 @mcp.tool()
@@ -287,8 +285,9 @@ async def query_unifi_events(
         event_id=event_id,
         limit=limit,
     )
-    try:
-        result = await domain_tools.query_unifi_events(
+    return await _instrumented(
+        "query_unifi_events",
+        domain_tools.query_unifi_events(
             from_ts=from_ts,
             to_ts=to_ts,
             settings=_require_settings(),
@@ -298,12 +297,8 @@ async def query_unifi_events(
             min_score=min_score,
             event_id=event_id,
             limit=limit,
-        )
-    except Exception:
-        _record_tool_call("query_unifi_events", "error")
-        raise
-    _record_tool_call("query_unifi_events", "ok")
-    return result
+        ),
+    )
 
 
 @mcp.tool()
@@ -326,8 +321,9 @@ async def correlate_events(
         bucket=bucket,
         window=window,
     )
-    try:
-        result = await domain_tools.correlate_events(
+    return await _instrumented(
+        "correlate_events",
+        domain_tools.correlate_events(
             source_a=source_a,
             source_b=source_b,
             from_ts=from_ts,
@@ -335,12 +331,8 @@ async def correlate_events(
             settings=_require_settings(),
             window=window,
             bucket=bucket,
-        )
-    except Exception:
-        _record_tool_call("correlate_events", "error")
-        raise
-    _record_tool_call("correlate_events", "ok")
-    return result
+        ),
+    )
 
 
 @mcp.tool()
@@ -373,8 +365,9 @@ async def detect_anomalies(
         since=since,
         limit=limit,
     )
-    try:
-        result = await insights_tools.detect_anomalies(
+    return await _instrumented(
+        "detect_anomalies",
+        insights_tools.detect_anomalies(
             settings=_require_settings(),
             source=source,
             severity=severity,
@@ -382,12 +375,8 @@ async def detect_anomalies(
             since=since,
             until=until,
             limit=limit,
-        )
-    except Exception:
-        _record_tool_call("detect_anomalies", "error")
-        raise
-    _record_tool_call("detect_anomalies", "ok")
-    return result
+        ),
+    )
 
 
 @mcp.tool()
@@ -412,20 +401,17 @@ async def explain_anomaly(
         detector=detector,
         context_hours=context_hours,
     )
-    try:
-        result = await insights_tools.explain_anomaly(
+    return await _instrumented(
+        "explain_anomaly",
+        insights_tools.explain_anomaly(
             settings=_require_settings(),
             time=time,
             source=source,
             metric=metric,
             detector=detector,
             context_hours=context_hours,
-        )
-    except Exception:
-        _record_tool_call("explain_anomaly", "error")
-        raise
-    _record_tool_call("explain_anomaly", "ok")
-    return result
+        ),
+    )
 
 
 @mcp.tool()
@@ -436,9 +422,9 @@ async def get_forecast(
 ) -> dict[str, Any]:
     """Stored model forecasts for ``metric`` looking ``horizon_hours`` ahead.
 
-    No batch jobs populate ``mcp_forecasts`` yet — the tool works
-    against the table schema but will return an empty list until the
-    seasonal/Forecast.Solar jobs land.
+    Rows are produced by the ``forecast-solar`` (PV) and ``score-seasonal``
+    (statsforecast) batch jobs. An empty list means no stored forecast
+    covers the requested metric/window.
     """
     log.info(
         "tool_invoked",
@@ -447,18 +433,15 @@ async def get_forecast(
         horizon_hours=horizon_hours,
         model=model,
     )
-    try:
-        result = await insights_tools.get_forecast(
+    return await _instrumented(
+        "get_forecast",
+        insights_tools.get_forecast(
             settings=_require_settings(),
             metric=metric,
             horizon_hours=horizon_hours,
             model=model,
-        )
-    except Exception:
-        _record_tool_call("get_forecast", "error")
-        raise
-    _record_tool_call("get_forecast", "ok")
-    return result
+        ),
+    )
 
 
 @mcp.tool()
@@ -478,17 +461,14 @@ async def generate_insight_report(
         timeframe=timeframe,
         top_n=top_n,
     )
-    try:
-        result = await insights_tools.generate_insight_report(
+    return await _instrumented(
+        "generate_insight_report",
+        insights_tools.generate_insight_report(
             settings=_require_settings(),
             timeframe=timeframe,
             top_n=top_n,
-        )
-    except Exception:
-        _record_tool_call("generate_insight_report", "error")
-        raise
-    _record_tool_call("generate_insight_report", "ok")
-    return result
+        ),
+    )
 
 
 @mcp.tool()
@@ -510,15 +490,12 @@ async def get_current_state(
     with ``last_known_in_tsdb`` from TimescaleDB.
     """
     log.info("tool_invoked", tool="get_current_state", domain=domain, identifier=identifier)
-    try:
-        result = await live_tools.get_current_state(
+    return await _instrumented(
+        "get_current_state",
+        live_tools.get_current_state(
             domain=domain, settings=_require_settings(), identifier=identifier
-        )
-    except Exception:
-        _record_tool_call("get_current_state", "error")
-        raise
-    _record_tool_call("get_current_state", "ok")
-    return result
+        ),
+    )
 
 
 @mcp.tool()
@@ -537,15 +514,12 @@ async def subscribe_nats(
     log.info(
         "tool_invoked", tool="subscribe_nats", subject=subject, duration_seconds=duration_seconds
     )
-    try:
-        result = await live_tools.subscribe_nats(
+    return await _instrumented(
+        "subscribe_nats",
+        live_tools.subscribe_nats(
             subject=subject, settings=_require_settings(), duration_seconds=duration_seconds
-        )
-    except Exception:
-        _record_tool_call("subscribe_nats", "error")
-        raise
-    _record_tool_call("subscribe_nats", "ok")
-    return result
+        ),
+    )
 
 
 @mcp.tool()
@@ -575,20 +549,17 @@ async def get_current_knx(
         name=name,
         only_active=only_active,
     )
-    try:
-        result = await live_tools.get_current_knx(
+    return await _instrumented(
+        "get_current_knx",
+        live_tools.get_current_knx(
             settings=_require_settings(),
             room=room,
             function=function,
             name=name,
             only_active=only_active,
             limit=limit,
-        )
-    except Exception:
-        _record_tool_call("get_current_knx", "error")
-        raise
-    _record_tool_call("get_current_knx", "ok")
-    return result
+        ),
+    )
 
 
 _settings: Settings | None = None
@@ -601,9 +572,16 @@ def _require_settings() -> Settings:
     return _settings
 
 
+async def _livez(_request: Request) -> JSONResponse:
+    # Liveness: the process is up and serving — deliberately independent of
+    # DB/NATS health so an upstream outage never restarts the pod.
+    return JSONResponse({"status": "alive"})
+
+
 async def _healthz(_request: Request) -> JSONResponse:
-    # DB is the critical dependency and gates the status code; NATS is reported
-    # for visibility but a transient blip must not flap the pod (live tools only).
+    # Readiness/deep health: DB is the critical dependency and gates the
+    # status code; NATS is reported for visibility but a transient blip must
+    # not flap the pod (live tools only). Use /livez for liveness probes.
     db_ok = await db.healthcheck()
     body: dict[str, Any] = {"status": "ok" if db_ok else "degraded", "db": db_ok}
     if _settings is not None and _settings.nats_enabled:
@@ -618,6 +596,7 @@ async def _oauth_protected_resource(_request: Request) -> JSONResponse:
 
 
 def build_app() -> Starlette:
+    """Load settings and assemble the Starlette app (uvicorn factory target)."""
     global _settings
     _settings = load_settings()
 
@@ -635,7 +614,9 @@ def build_app() -> Starlette:
         await db.init_pool(_settings)
         if _settings.nats_enabled:
             await nats_module.init(_settings)
-        metrics_server = await metrics_module.serve(metrics_module.get(), _settings.metrics_port)
+        metrics_server, metrics_thread = metrics_module.serve(
+            metrics_module.get(), _settings.metrics_port
+        )
         log.info(
             "iot_mcp_bridge_ready",
             host=_settings.host,
@@ -648,12 +629,13 @@ def build_app() -> Starlette:
             async with mcp_app.lifespan(app):
                 yield
         finally:
-            metrics_server.close()
-            await metrics_server.wait_closed()
+            metrics_server.shutdown()
+            metrics_thread.join()
             await nats_module.close()
             await db.close_pool()
 
     routes = [
+        Route("/livez", _livez, methods=["GET"]),
         Route("/healthz", _healthz, methods=["GET"]),
         Route(
             "/.well-known/oauth-protected-resource",
@@ -664,6 +646,3 @@ def build_app() -> Starlette:
     ]
     middleware = [Middleware(auth_module.AuthMiddleware, settings=_settings)]
     return Starlette(routes=routes, middleware=middleware, lifespan=lifespan)
-
-
-app = build_app()

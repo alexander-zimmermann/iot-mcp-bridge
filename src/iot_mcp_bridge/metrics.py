@@ -1,20 +1,20 @@
-"""Prometheus metrics registry and a tiny HTTP server exposing /metrics."""
+"""Prometheus metrics registry and the /metrics exposition server."""
 
 from __future__ import annotations
 
-import asyncio
-import contextlib
-import logging
+import threading
+from wsgiref.simple_server import WSGIServer
 
 from prometheus_client import (
-    CONTENT_TYPE_LATEST,
     CollectorRegistry,
     Counter,
     Histogram,
-    generate_latest,
+    start_http_server,
 )
 
-logger = logging.getLogger(__name__)
+from .logging_setup import get_logger
+
+log = get_logger(__name__)
 
 
 class Metrics:
@@ -89,47 +89,12 @@ def reset() -> None:
     _metrics = None
 
 
-async def serve(metrics: Metrics, port: int) -> asyncio.AbstractServer:
-    """Start a tiny HTTP server exposing /metrics on the given port."""
+def serve(metrics: Metrics, port: int) -> tuple[WSGIServer, threading.Thread]:
+    """Expose ``metrics.registry`` on ``/metrics`` via prometheus_client's threaded server.
 
-    async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
-        try:
-            request_line = await reader.readline()
-            if not request_line:
-                writer.close()
-                return
-            while True:
-                line = await reader.readline()
-                if line in (b"\r\n", b"\n", b""):
-                    break
-
-            parts = request_line.decode("ascii", errors="replace").split()
-            path = parts[1] if len(parts) >= 2 else "/"
-
-            if path.startswith("/metrics"):
-                body = generate_latest(metrics.registry)
-                writer.write(
-                    b"HTTP/1.1 200 OK\r\n"
-                    + f"Content-Type: {CONTENT_TYPE_LATEST}\r\n".encode("ascii")
-                    + f"Content-Length: {len(body)}\r\n\r\n".encode("ascii")
-                    + body
-                )
-            else:
-                body = b"not found\n"
-                writer.write(
-                    b"HTTP/1.1 404 Not Found\r\n"
-                    b"Content-Type: text/plain\r\n"
-                    + f"Content-Length: {len(body)}\r\n\r\n".encode("ascii")
-                    + body
-                )
-            await writer.drain()
-        except Exception:
-            logger.exception("metrics http handler failed")
-        finally:
-            writer.close()
-            with contextlib.suppress(Exception):
-                await writer.wait_closed()
-
-    server = await asyncio.start_server(handle, host="0.0.0.0", port=port)  # noqa: S104
-    logger.info("metrics server listening on :%d", port)
-    return server
+    Returns the server and its daemon thread so the caller can ``shutdown()``
+    and ``join()`` them on app teardown.
+    """
+    server, thread = start_http_server(port, registry=metrics.registry)
+    log.info("metrics_server_listening", port=server.server_port)
+    return server, thread
