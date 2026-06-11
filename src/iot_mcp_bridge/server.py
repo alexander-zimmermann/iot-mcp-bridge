@@ -223,6 +223,9 @@ async def query_knx_events(
                       events in a room
 
     Default ``limit`` 200; effective cap ``min(limit, query_row_limit)``.
+    When more rows match, the newest ``limit`` rows are returned with
+    ``truncated: true`` — narrow the filters or shorten the window for
+    the rest.
     """
     log.info(
         "tool_invoked",
@@ -274,6 +277,9 @@ async def query_unifi_events(
     * ``event_id``       — exact UUID; use to fetch details for one alarm
 
     Default ``limit`` 200; effective cap ``min(limit, query_row_limit)``.
+    When more rows match, the newest ``limit`` rows are returned with
+    ``truncated: true`` — narrow the filters or shorten the window for
+    the rest.
     """
     log.info(
         "tool_invoked",
@@ -354,7 +360,9 @@ async def detect_anomalies(
     * ``since``    — Postgres interval, default ``"1 day ago"``
     * ``until``    — optional upper bound ISO timestamp
 
-    Newest first. ``limit`` capped at the server's ``query_row_limit``.
+    Newest first. ``limit`` capped at the server's ``query_row_limit``;
+    when more rows match, the newest ``limit`` are returned with
+    ``truncated: true``.
     """
     log.info(
         "tool_invoked",

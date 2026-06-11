@@ -18,6 +18,9 @@ def _serialize_row(row: dict[str, Any]) -> dict[str, Any]:
 
 
 def _check_row_limit(rows: list[Any], row_limit: int, hint: str) -> None:
+    """Guard for the aggregation tools: computing sums/averages on a truncated
+    result would be silently wrong, so exceeding the cap is an error. The
+    event-log tools truncate and flag instead (newest-first stays meaningful)."""
     if len(rows) > row_limit:
         raise ValueError(f"row_limit_exceeded: result would exceed {row_limit} rows; {hint}")
 
@@ -298,7 +301,10 @@ async def query_knx_events(
                       the catalog so invalid names produce a precise error
 
     Default ``limit`` is 200 (typical "what happened recently" window).
-    Effective cap is ``min(limit, settings.query_row_limit)``.
+    Effective cap is ``min(limit, settings.query_row_limit)``. When more rows
+    match, the newest ``limit`` rows are returned with ``truncated: true`` —
+    the newest-first ordering keeps a truncated event log meaningful (unlike
+    the aggregation tools, which error instead of computing on partial data).
     """
     if limit <= 0:
         raise ValueError(f"invalid_limit: {limit}")
@@ -342,13 +348,15 @@ async def query_knx_events(
         async with connection() as conn:
             rows = await (await conn.execute(stmt, params)).fetchall()
 
-    _check_row_limit(rows, effective_limit, "narrow by room/ga/name or shorten time range")
+    truncated = len(rows) > effective_limit
+    rows = rows[:effective_limit]
     return {
         "from_ts": str(from_ts),
         "to_ts": str(to_ts),
         "filters": {"room": room, "ga": ga, "name": name, "functions": functions},
         "limit": effective_limit,
         "row_count": len(rows),
+        "truncated": truncated,
         "rows": [_serialize_row(r) for r in rows],
     }
 
@@ -389,7 +397,8 @@ async def query_unifi_events(
     * ``event_id``       — exact UUID; use to look up details for one alarm
 
     Default ``limit`` is 200; effective cap is
-    ``min(limit, settings.query_row_limit)``.
+    ``min(limit, settings.query_row_limit)``. When more rows match, the
+    newest ``limit`` rows are returned with ``truncated: true``.
     """
     if limit <= 0:
         raise ValueError(f"invalid_limit: {limit}")
@@ -432,7 +441,8 @@ async def query_unifi_events(
         async with connection() as conn:
             rows = await (await conn.execute(stmt, params)).fetchall()
 
-    _check_row_limit(rows, effective_limit, "narrow by camera/detection_type or shorten time range")
+    truncated = len(rows) > effective_limit
+    rows = rows[:effective_limit]
     return {
         "from_ts": str(from_ts),
         "to_ts": str(to_ts),
@@ -445,6 +455,7 @@ async def query_unifi_events(
         },
         "limit": effective_limit,
         "row_count": len(rows),
+        "truncated": truncated,
         "rows": [_serialize_row(r) for r in rows],
     }
 
