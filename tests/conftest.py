@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import AsyncIterator, Iterator
+from typing import LiteralString
 
 import psycopg
 import pytest
@@ -322,7 +323,8 @@ def _seed(conn: psycopg.Connection) -> None:
     conn.execute("SELECT create_hypertable('mcp_forecasts', by_range('forecast_for'))")
 
 
-_CAGGS: list[tuple[str, str]] = [
+# LiteralString so the tuple elements stay assignable to psycopg's Query type.
+_CAGGS: list[tuple[LiteralString, LiteralString]] = [
     (
         """
         CREATE MATERIALIZED VIEW knx_1h

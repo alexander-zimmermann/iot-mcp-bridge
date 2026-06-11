@@ -71,45 +71,15 @@ warn_unused_configs = true
 warn_unused_ignores = true
 
 [[tool.mypy.overrides]]
-# psycopg's dict_row factory returns dicts at runtime but the stubs cannot
-# express that, so row["col"] reads are flagged. We rely on tests instead.
-module = [
-    "iot_mcp_bridge.tools.schema",
-    "iot_mcp_bridge.tools.timeseries",
-    "iot_mcp_bridge.tools.domain",
-    "iot_mcp_bridge.tools.insights",
-    "iot_mcp_bridge.tools.live",
-]
-disable_error_code = ["call-overload", "attr-defined", "index", "dict-item", "assignment", "arg-type"]
-
-[[tool.mypy.overrides]]
-module = ["fastmcp", "fastmcp.*", "nats", "nats.*"]
+module = ["fastmcp", "fastmcp.*", "testcontainers.*", "nats", "nats.*"]
 ignore_missing_imports = true
 
-# Pylance/Pyright counterparts to the mypy overrides above — quiet the
-# psycopg `dict_row` and stub-gap warnings the CI gate (mypy) already
-# disables.
+# No rule relaxations — src and tests are clean under both mypy --strict and
+# Pyright's standard mode (dynamic SQL goes through psycopg.sql composition).
 [tool.pyright]
 include = ["src", "tests"]
 venvPath = "."
 venv = ".venv"
-reportUnknownMemberType = "none"
-reportUnknownArgumentType = "none"
-reportUnknownVariableType = "none"
-reportAttributeAccessIssue = "none"
-reportUnnecessaryIsInstance = "none"
-reportUnnecessaryComparison = "none"
-# psycopg's stubs declare `cursor.execute(query: QueryNoTemplate, ...)` where
-# QueryNoTemplate excludes plain `str`; in practice we pass dynamically-built
-# SQL strings (registry-driven detector, dynamic WHERE clauses). Same gap mypy
-# already disables via tool.mypy.overrides for these modules.
-reportArgumentType = "none"
-reportCallIssue = "none"
-reportReturnType = "none"
-
-[[tool.pyright.executionEnvironments]]
-root = "tests"
-reportPrivateUsage = "none"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

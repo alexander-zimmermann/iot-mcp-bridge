@@ -19,9 +19,10 @@ KIND_CONTINUOUS_AGGREGATE = "continuous_aggregate"
 # so a short single-entry TTL cache removes the repeat cost; new tables show up
 # after at most one TTL period.
 _SOURCES_CACHE_TTL_SECONDS = 60
-_sources_cache: TTLCache[str, list[dict[str, Any]]] = TTLCache(
-    maxsize=1, ttl=_SOURCES_CACHE_TTL_SECONDS
-)
+# Alias pins the key/value types for both mypy and Pyright — the cachetools
+# stubs cannot infer them from an otherwise-empty constructor.
+_SourcesCache = TTLCache[str, list[dict[str, Any]]]
+_sources_cache: _SourcesCache = _SourcesCache(maxsize=1, ttl=_SOURCES_CACHE_TTL_SECONDS)
 
 
 def invalidate_cache() -> None:

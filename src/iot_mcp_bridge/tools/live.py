@@ -21,6 +21,8 @@ from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import Any
 
+from psycopg import sql
+
 from .. import metrics as metrics_module
 from .. import nats as nats_module
 from ..config import Settings
@@ -258,6 +260,7 @@ _DISPATCH: dict[str, Callable[[str | None], Awaitable[tuple[dict[str, Any], date
 
 
 async def _tsdb_fallback(domain: str, identifier: str | None) -> dict[str, Any] | None:
+    params: tuple[Any, ...]
     if domain == "heating":
         stmt, params, table = (
             "SELECT * FROM ems_esp WHERE topic = 'boiler_data' ORDER BY time DESC LIMIT 1",
@@ -392,23 +395,23 @@ async def get_current_knx(
         raise ValueError(f"invalid_limit: {limit}")
     effective_limit = min(limit, settings.query_row_limit)
 
-    where: list[str] = []
+    where: list[sql.Composable] = []
     params: list[Any] = []
     if room is not None:
-        where.append("room = %s")
+        where.append(sql.SQL("room = %s"))
         params.append(room)
     if function is not None:
-        where.append("function = %s")
+        where.append(sql.SQL("function = %s"))
         params.append(function)
     if name is not None:
-        where.append("name ILIKE %s")
+        where.append(sql.SQL("name ILIKE %s"))
         params.append(f"%{name}%")
-    clause = (" WHERE " + " AND ".join(where)) if where else ""
+    clause = sql.SQL(" WHERE ") + sql.SQL(" AND ").join(where) if where else sql.SQL("")
     params.append(effective_limit)
-    catalog_sql = (
-        f"SELECT ga, name AS ga_name, room, function, dpt FROM ga_catalog{clause} "
+    catalog_sql = sql.SQL(
+        "SELECT ga, name AS ga_name, room, function, dpt FROM ga_catalog{clause} "
         "ORDER BY ga LIMIT %s"
-    )
+    ).format(clause=clause)
 
     metrics_module.get().db_queries.labels(tool="get_current_knx", table_used="ga_catalog").inc()
     async with connection() as conn:
