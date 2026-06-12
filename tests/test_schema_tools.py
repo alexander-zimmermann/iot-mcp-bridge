@@ -1,3 +1,5 @@
+"""Schema-discovery tool tests against the seeded TimescaleDB container."""
+
 from __future__ import annotations
 
 import pytest

@@ -21,6 +21,8 @@ from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import Any
 
+from psycopg import sql
+
 from .. import metrics as metrics_module
 from .. import nats as nats_module
 from ..config import Settings
@@ -56,6 +58,11 @@ _SUBSCRIBE_MAX_MESSAGES = 200
 #    (a V/A/W-per-phase array; indices 6..8 are the three phase powers).
 _WALLBOX_STATE_SUBJECT = "warp.evse.state"
 _WALLBOX_POWER_SUBJECT = "warp.meters.0.values"
+# get_current_knx resolves one JetStream read per matching GA; the semaphore
+# keeps a broad filter (up to query_row_limit GAs) from opening thousands of
+# concurrent requests against the NATS server at once.
+_LAST_VALUE_CONCURRENCY = 20
+
 _WALLBOX_STATE_FIELDS = (
     "charger_state",
     "iec61851_state",
@@ -253,6 +260,7 @@ _DISPATCH: dict[str, Callable[[str | None], Awaitable[tuple[dict[str, Any], date
 
 
 async def _tsdb_fallback(domain: str, identifier: str | None) -> dict[str, Any] | None:
+    params: tuple[Any, ...]
     if domain == "heating":
         stmt, params, table = (
             "SELECT * FROM ems_esp WHERE topic = 'boiler_data' ORDER BY time DESC LIMIT 1",
@@ -296,7 +304,7 @@ async def _tsdb_fallback(domain: str, identifier: str | None) -> dict[str, Any] 
     try:
         async with connection() as conn:
             row = await (await conn.execute(stmt, params)).fetchone()
-    except Exception as exc:  # noqa: BLE001 — fallback is best-effort
+    except Exception as exc:  # fallback is best-effort
         log.warning("tsdb_fallback_failed", domain=domain, error=str(exc))
         return None
     return _serialize_row(row) if row else None
@@ -387,23 +395,23 @@ async def get_current_knx(
         raise ValueError(f"invalid_limit: {limit}")
     effective_limit = min(limit, settings.query_row_limit)
 
-    where: list[str] = []
+    where: list[sql.Composable] = []
     params: list[Any] = []
     if room is not None:
-        where.append("room = %s")
+        where.append(sql.SQL("room = %s"))
         params.append(room)
     if function is not None:
-        where.append("function = %s")
+        where.append(sql.SQL("function = %s"))
         params.append(function)
     if name is not None:
-        where.append("name ILIKE %s")
+        where.append(sql.SQL("name ILIKE %s"))
         params.append(f"%{name}%")
-    clause = (" WHERE " + " AND ".join(where)) if where else ""
+    clause = sql.SQL(" WHERE ") + sql.SQL(" AND ").join(where) if where else sql.SQL("")
     params.append(effective_limit)
-    catalog_sql = (
-        f"SELECT ga, name AS ga_name, room, function, dpt FROM ga_catalog{clause} "
+    catalog_sql = sql.SQL(
+        "SELECT ga, name AS ga_name, room, function, dpt FROM ga_catalog{clause} "
         "ORDER BY ga LIMIT %s"
-    )
+    ).format(clause=clause)
 
     metrics_module.get().db_queries.labels(tool="get_current_knx", table_used="ga_catalog").inc()
     async with connection() as conn:
@@ -453,12 +461,15 @@ async def get_current_knx(
 async def _knx_last_values(gas: list[str]) -> dict[str, tuple[Any, datetime]]:
     """Map each ga (`m/h/s`) → (current value, timestamp) via per-GA get_last_msg.
 
-    One direct JetStream read per GA (no consumer, no ack), run concurrently —
-    works with the MCP server's subscribe-only nkey ($JS.API + _INBOX, no $JS.ACK).
+    One direct JetStream read per GA (no consumer, no ack), run concurrently
+    but bounded by ``_LAST_VALUE_CONCURRENCY`` — works with the MCP server's
+    subscribe-only nkey ($JS.API + _INBOX, no $JS.ACK).
     """
+    sem = asyncio.Semaphore(_LAST_VALUE_CONCURRENCY)
 
     async def _one(ga: str) -> tuple[str, nats_module.StateMsg | None]:
-        return ga, await nats_module.last_msg("KNX", "knx." + ga.replace("/", "."))
+        async with sem:
+            return ga, await nats_module.last_msg("KNX", "knx." + ga.replace("/", "."))
 
     results = await asyncio.gather(*[_one(ga) for ga in gas])
     out: dict[str, tuple[Any, datetime]] = {}

@@ -1,3 +1,5 @@
+"""structlog configuration — JSON or console rendering with contextvars merged in."""
+
 from __future__ import annotations
 
 import logging

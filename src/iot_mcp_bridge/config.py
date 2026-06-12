@@ -1,3 +1,5 @@
+"""Runtime configuration from ``MCP_``-prefixed env vars and mounted secret files."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -12,7 +14,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="MCP_", env_file=".env", extra="ignore")
 
     # Server: HTTP listener and log rendering.
-    host: str = "0.0.0.0"  # noqa: S104
+    host: str = "0.0.0.0"
     port: int = 8080
     log_level: str = "INFO"
     log_format: Literal["json", "console"] = "json"
@@ -42,6 +44,9 @@ class Settings(BaseSettings):
     auth_issuer: str | None = None
     auth_audience: str | None = None
     auth_jwks_ttl_seconds: int = 3600
+    # Cooldown between JWKS fetch attempts — bounds how often unauthenticated
+    # callers with unknown-kid tokens can force a request to the issuer.
+    auth_jwks_min_refresh_seconds: float = 30.0
     auth_resource_url: str | None = None
 
     # NATS: live current-state reads from JetStream (last message per subject).

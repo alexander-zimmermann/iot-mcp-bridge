@@ -1,3 +1,6 @@
-from . import schema, timeseries
+"""MCP tool implementations, grouped by layer: schema discovery, generic
+time-series aggregation, domain queries, insights, and live NATS state."""
 
-__all__ = ["schema", "timeseries"]
+from . import domain, insights, live, schema, timeseries
+
+__all__ = ["domain", "insights", "live", "schema", "timeseries"]

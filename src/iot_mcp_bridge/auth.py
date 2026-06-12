@@ -4,13 +4,14 @@ Activated when ``MCP_AUTH_ENABLED=true``. The MCP endpoint then requires a
 valid JWT issued by ``MCP_AUTH_ISSUER`` (Authentik in production), signed by
 a key from ``MCP_AUTH_JWKS_URL``, and bound to ``MCP_AUTH_AUDIENCE``.
 
-The transport hook is :class:`AuthMiddleware` (pure ASGI). On success it
+The transport hook is ``AuthMiddleware`` (pure ASGI). On success it
 binds ``sub`` and ``client_id`` to structlog's contextvars so every log
 line emitted while handling the request carries the caller identity.
 """
 
 from __future__ import annotations
 
+import asyncio
 import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
@@ -39,11 +40,17 @@ class Principal:
 
 
 class AuthError(Exception):
-    """Raised when a token is invalid; ``reason`` is logged and surfaced via 401."""
+    """Raised when a token is invalid; ``reason`` is logged and surfaced to the client.
 
-    def __init__(self, reason: str) -> None:
+    ``status`` is the HTTP status the middleware responds with — 401 for bad
+    tokens, 503 when the JWKS endpoint is unreachable and no keys are cached
+    (a server-side outage the client cannot fix by re-authenticating).
+    """
+
+    def __init__(self, reason: str, status: int = 401) -> None:
         super().__init__(reason)
         self.reason = reason
+        self.status = status
 
 
 class JwksCache:
@@ -51,26 +58,45 @@ class JwksCache:
 
     httpx is used (not urllib via PyJWKClient) so respx can intercept the
     request in tests and the production path stays fully async.
+
+    Refreshes are serialized behind a lock and rate-limited to one attempt per
+    ``min_refresh_seconds`` — without the cooldown, every request carrying a
+    token with an unknown ``kid`` would force an upstream JWKS fetch, handing
+    unauthenticated callers a lever to hammer the issuer. When a refresh fails
+    and a previous key set exists, the stale set is served instead of failing
+    the request: validating against slightly-old keys is strictly better than
+    rejecting all traffic during an issuer blip.
     """
 
-    def __init__(self, url: str, ttl_seconds: int) -> None:
+    def __init__(self, url: str, ttl_seconds: int, min_refresh_seconds: float = 30.0) -> None:
         self._url = url
         self._ttl = ttl_seconds
+        self._min_refresh = min_refresh_seconds
         self._jwks: PyJWKSet | None = None
         self._loaded_at: float = 0.0
+        self._last_attempt: float = 0.0
+        self._lock = asyncio.Lock()
 
     async def _refresh(self) -> None:
-        try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                resp = await client.get(self._url)
-                resp.raise_for_status()
-                self._jwks = PyJWKSet.from_dict(resp.json())
-                self._loaded_at = time.time()
-                log.info("jwks_refreshed", url=self._url, key_count=len(self._jwks.keys))
-                metrics_module.get().jwks_refresh.labels(result="ok").inc()
-        except Exception:
-            metrics_module.get().jwks_refresh.labels(result="error").inc()
-            raise
+        async with self._lock:
+            if (time.time() - self._last_attempt) < self._min_refresh:
+                if self._jwks is None:
+                    raise AuthError("jwks_unavailable", status=503)
+                return
+            self._last_attempt = time.time()
+            try:
+                async with httpx.AsyncClient(timeout=10.0) as client:
+                    resp = await client.get(self._url)
+                    resp.raise_for_status()
+                    self._jwks = PyJWKSet.from_dict(resp.json())
+                    self._loaded_at = time.time()
+                    log.info("jwks_refreshed", url=self._url, key_count=len(self._jwks.keys))
+                    metrics_module.get().jwks_refresh.labels(result="ok").inc()
+            except Exception as exc:
+                metrics_module.get().jwks_refresh.labels(result="error").inc()
+                if self._jwks is None:
+                    raise
+                log.warning("jwks_refresh_failed_serving_stale", url=self._url, error=str(exc))
 
     async def get_signing_key(self, kid: str | None) -> PyJWK:
         if self._jwks is None or (time.time() - self._loaded_at) > self._ttl:
@@ -79,7 +105,8 @@ class JwksCache:
         try:
             return self._lookup(kid)
         except KeyError:
-            # Unknown kid — issuer may have rotated keys; refresh once.
+            # Unknown kid — issuer may have rotated keys; refresh once
+            # (subject to the cooldown, so this cannot be abused as a DoS).
             await self._refresh()
             return self._lookup(kid)
 
@@ -107,7 +134,11 @@ def configure(settings: Settings) -> None:
     """Initialize (or tear down) the module-level JWKS cache."""
     global _jwks
     if settings.auth_enabled and settings.auth_jwks_url:
-        _jwks = JwksCache(settings.auth_jwks_url, settings.auth_jwks_ttl_seconds)
+        _jwks = JwksCache(
+            settings.auth_jwks_url,
+            settings.auth_jwks_ttl_seconds,
+            min_refresh_seconds=settings.auth_jwks_min_refresh_seconds,
+        )
     else:
         _jwks = None
 
@@ -130,6 +161,12 @@ async def verify_token(token: str | None, settings: Settings) -> Principal | Non
         signing_key = await _jwks.get_signing_key(kid)
     except KeyError as exc:
         raise AuthError("unknown_signing_key") from exc
+    except AuthError:
+        raise
+    except Exception as exc:
+        # JWKS endpoint unreachable / bad response with no cached keys —
+        # a server-side outage, not a client error.
+        raise AuthError("jwks_unavailable", status=503) from exc
 
     try:
         claims = jwt.decode(
@@ -189,14 +226,21 @@ def _www_authenticate(reason: str, settings: Settings) -> str:
     return challenge
 
 
-async def _send_unauthorized(send: Send, reason: str, settings: Settings) -> None:
-    body = b'{"error":"unauthorized"}'
-    headers = [
-        (b"content-type", b"application/json"),
-        (b"www-authenticate", _www_authenticate(reason, settings).encode("ascii")),
-        (b"content-length", str(len(body)).encode("ascii")),
-    ]
-    await send({"type": "http.response.start", "status": 401, "headers": headers})
+async def _send_auth_error(send: Send, exc: AuthError, settings: Settings) -> None:
+    if exc.status == 401:
+        body = b'{"error":"unauthorized"}'
+        headers = [
+            (b"content-type", b"application/json"),
+            (b"www-authenticate", _www_authenticate(exc.reason, settings).encode("ascii")),
+            (b"content-length", str(len(body)).encode("ascii")),
+        ]
+    else:
+        body = b'{"error":"auth_unavailable"}'
+        headers = [
+            (b"content-type", b"application/json"),
+            (b"content-length", str(len(body)).encode("ascii")),
+        ]
+    await send({"type": "http.response.start", "status": exc.status, "headers": headers})
     await send({"type": "http.response.body", "body": body})
 
 
@@ -209,8 +253,8 @@ def oauth_protected_resource_metadata(settings: Settings) -> dict[str, object]:
     }
 
 
-# Paths that bypass authentication: liveness probe and OAuth discovery.
-_PUBLIC_PATHS: frozenset[str] = frozenset({"/healthz"})
+# Paths that bypass authentication: probe endpoints and OAuth discovery.
+_PUBLIC_PATHS: frozenset[str] = frozenset({"/healthz", "/livez"})
 _PUBLIC_PREFIXES: tuple[str, ...] = ("/.well-known/",)
 
 
@@ -223,7 +267,7 @@ class AuthMiddleware:
 
     When auth is disabled or the path is public, requests pass straight
     through. Otherwise the token is validated and the resulting
-    :class:`Principal` is bound into structlog contextvars (``sub``,
+    ``Principal`` is bound into structlog contextvars (``sub``,
     ``client_id``) for the duration of the request.
     """
 
@@ -248,10 +292,11 @@ class AuthMiddleware:
             log.info(
                 "auth_rejected",
                 reason=exc.reason,
+                status=exc.status,
                 path=path,
                 method=scope.get("method"),
             )
-            await _send_unauthorized(send, exc.reason, self.settings)
+            await _send_auth_error(send, exc, self.settings)
             return
 
         if principal is None:

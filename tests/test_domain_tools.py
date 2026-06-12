@@ -1,3 +1,5 @@
+"""Domain-tool tests against the seeded TimescaleDB container."""
+
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
@@ -160,6 +162,29 @@ async def test_knx_events_functions_filter(settings: Settings, db_pool: None) ->
     assert all(r["function"] == "Sensors" for r in out["rows"])
 
 
+async def test_knx_events_rejects_unknown_function(settings: Settings, db_pool: None) -> None:
+    f, t = _now_window()
+    with pytest.raises(ValueError, match="unknown_functions.*Bogus"):
+        await domain_tools.query_knx_events(f, t, settings=settings, functions=["Bogus"])
+
+
+async def test_knx_events_truncates_newest_first_with_flag(
+    settings: Settings, db_pool: None
+) -> None:
+    f, t = _now_window()
+    out = await domain_tools.query_knx_events(f, t, settings=settings, limit=10)
+    assert out["row_count"] == 10
+    assert out["truncated"] is True
+    times = [r["time"] for r in out["rows"]]
+    assert times == sorted(times, reverse=True)  # the newest 10, not an arbitrary 10
+
+
+async def test_knx_events_not_truncated_below_limit(settings: Settings, db_pool: None) -> None:
+    f, t = _now_window()
+    out = await domain_tools.query_knx_events(f, t, settings=settings, limit=500)
+    assert out["truncated"] is False
+
+
 async def test_knx_events_name_filter(settings: Settings, db_pool: None) -> None:
     f, t = _now_window()
     out = await domain_tools.query_knx_events(
@@ -236,10 +261,22 @@ async def test_correlate_events_unknown_table(settings: Settings, db_pool: None)
 # =====================================================================
 
 
+async def test_unifi_events_truncates_newest_first_with_flag(
+    settings: Settings, db_pool: None
+) -> None:
+    f, t = _now_window()
+    out = await domain_tools.query_unifi_events(f, t, settings=settings, limit=5)
+    assert out["row_count"] == 5
+    assert out["truncated"] is True
+    times = [r["time"] for r in out["rows"]]
+    assert times == sorted(times, reverse=True)
+
+
 async def test_unifi_events_returns_all_in_window(settings: Settings, db_pool: None) -> None:
     f, t = _now_window()
     out = await domain_tools.query_unifi_events(f, t, settings=settings)
     assert out["row_count"] == 40
+    assert out["truncated"] is False
     sample = out["rows"][0]
     expected = {
         "time",

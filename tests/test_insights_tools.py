@@ -8,7 +8,7 @@ from collections.abc import AsyncIterator
 import psycopg
 import pytest
 import pytest_asyncio
-from psycopg.rows import dict_row
+from psycopg.rows import DictRow, dict_row
 
 from iot_mcp_bridge.config import Settings
 from iot_mcp_bridge.tools import insights
@@ -18,7 +18,11 @@ from iot_mcp_bridge.tools import insights
 async def seeded_anomalies(settings: Settings, db_pool: None) -> AsyncIterator[None]:
     """Seed 10 mcp_anomalies + 4 mcp_forecasts rows with known characteristics:
     5 info / 3 warning / 2 critical across two sources, ucs, metrics."""
-    conn = psycopg.connect(settings.db_dsn, autocommit=True, row_factory=dict_row)
+    # Subscripted so Row binds to DictRow — bare psycopg.connect() defaults the
+    # Row typevar to TupleRow, which rejects the dict_row factory.
+    conn = psycopg.Connection[DictRow].connect(
+        settings.db_dsn, autocommit=True, row_factory=dict_row
+    )
     try:
         conn.execute("TRUNCATE TABLE mcp_anomalies")
         conn.execute("TRUNCATE TABLE mcp_forecasts")
@@ -76,15 +80,14 @@ async def test_detect_anomalies_returns_all_recent(
 ) -> None:
     result = await insights.detect_anomalies(settings=settings, since="1 day")
     assert result["row_count"] == 10
+    assert result["truncated"] is False
     assert {r["severity"] for r in result["rows"]} == {"info", "warning", "critical"}
 
 
 async def test_detect_anomalies_filter_by_severity(
     settings: Settings, seeded_anomalies: None
 ) -> None:
-    result = await insights.detect_anomalies(
-        settings=settings, severity="critical", since="1 day"
-    )
+    result = await insights.detect_anomalies(settings=settings, severity="critical", since="1 day")
     assert result["row_count"] == 2
     assert all(r["severity"] == "critical" for r in result["rows"])
 
@@ -107,11 +110,10 @@ async def test_detect_anomalies_rejects_invalid_severity(settings: Settings) -> 
         await insights.detect_anomalies(settings=settings, severity="bogus")
 
 
-async def test_detect_anomalies_limit_capped(
-    settings: Settings, seeded_anomalies: None
-) -> None:
+async def test_detect_anomalies_limit_capped(settings: Settings, seeded_anomalies: None) -> None:
     result = await insights.detect_anomalies(settings=settings, limit=3, since="1 day")
     assert result["row_count"] == 3
+    assert result["truncated"] is True
 
 
 # =====================================================================
@@ -122,9 +124,7 @@ async def test_detect_anomalies_limit_capped(
 async def test_explain_anomaly_returns_row_and_context(
     settings: Settings, seeded_anomalies: None
 ) -> None:
-    listing = await insights.detect_anomalies(
-        settings=settings, severity="critical", since="1 day"
-    )
+    listing = await insights.detect_anomalies(settings=settings, severity="critical", since="1 day")
     target = listing["rows"][0]
     result = await insights.explain_anomaly(
         settings=settings,
@@ -154,9 +154,7 @@ async def test_explain_anomaly_not_found(settings: Settings, db_pool: None) -> N
 # =====================================================================
 
 
-async def test_get_forecast_returns_seeded_rows(
-    settings: Settings, seeded_anomalies: None
-) -> None:
+async def test_get_forecast_returns_seeded_rows(settings: Settings, seeded_anomalies: None) -> None:
     result = await insights.get_forecast(settings=settings, metric="pv_production_avg")
     assert result["metric"] == "pv_production_avg"
     assert result["row_count"] == 4

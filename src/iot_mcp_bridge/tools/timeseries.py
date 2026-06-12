@@ -1,3 +1,5 @@
+"""Generic bucketed aggregation over hypertables and continuous aggregates."""
+
 from __future__ import annotations
 
 import re
@@ -68,15 +70,6 @@ async def _resolve_table(
     return chosen["name"], chosen["schema"], chosen["kind"], chosen["time_column"]
 
 
-async def _validated_columns(table: str, columns: list[str]) -> list[str]:
-    schema = await get_schema(table)
-    known = {c["name"] for c in schema["columns"]}
-    unknown = [c for c in columns if c not in known]
-    if unknown:
-        raise ValueError(f"unknown_columns: {unknown}")
-    return columns
-
-
 def _validate_filters(
     filters: dict[str, Any] | None,
     valid_columns: set[str],
@@ -113,10 +106,13 @@ async def query_timeseries(
     bucket = _validate_interval(bucket)
 
     target, target_schema, target_kind, time_col = await _resolve_table(table, bucket)
-    cols = await _validated_columns(target, columns)
 
     schema = await get_schema(target)
     valid_cols = {c["name"] for c in schema["columns"]}
+    unknown = [c for c in columns if c not in valid_cols]
+    if unknown:
+        raise ValueError(f"unknown_columns: {unknown}")
+    cols = columns
     flt = _validate_filters(filters, valid_cols)
 
     select_parts: list[sql.Composable] = [

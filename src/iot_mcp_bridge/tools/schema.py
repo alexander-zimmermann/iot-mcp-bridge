@@ -1,7 +1,10 @@
+"""Schema discovery tools — data-source catalog and per-table description."""
+
 from __future__ import annotations
 
 from typing import Any
 
+from cachetools import TTLCache
 from psycopg import sql
 
 from .. import metrics as metrics_module
@@ -9,6 +12,23 @@ from ..db import connection
 
 KIND_HYPERTABLE = "hypertable"
 KIND_CONTINUOUS_AGGREGATE = "continuous_aggregate"
+
+# Every tool call funnels through list_data_sources() for validation and CAGG
+# routing, and the underlying catalog walk (2 + 2N queries incl. a MIN/MAX scan
+# per source) dwarfs the actual tool query. Hypertables and CAGGs change rarely,
+# so a short single-entry TTL cache removes the repeat cost; new tables show up
+# after at most one TTL period.
+_SOURCES_CACHE_TTL_SECONDS = 60
+# Alias pins the key/value types for both mypy and Pyright — the cachetools
+# stubs cannot infer them from an otherwise-empty constructor.
+_SourcesCache = TTLCache[str, list[dict[str, Any]]]
+_sources_cache: _SourcesCache = _SourcesCache(maxsize=1, ttl=_SOURCES_CACHE_TTL_SECONDS)
+
+
+def invalidate_cache() -> None:
+    """Drop the cached data-source catalog (used by tests for isolation)."""
+    _sources_cache.clear()
+
 
 _LIST_HYPERTABLES_SQL = """
 SELECT
@@ -89,6 +109,10 @@ async def list_data_sources() -> list[dict[str, Any]]:
     Each entry contains: ``schema``, ``name``, ``kind``, ``description``,
     ``time_column``, ``time_range`` (``min``/``max``).
     """
+    cached = _sources_cache.get("sources")
+    if cached is not None:
+        return cached
+
     m = metrics_module.get()
     m.db_queries.labels(tool="list_data_sources", table_used="_metadata").inc()
     with m.db_query_duration.labels(tool="list_data_sources").time():
@@ -128,14 +152,15 @@ async def list_data_sources() -> list[dict[str, Any]]:
                     "time_range": time_range,
                 }
             )
+        _sources_cache["sources"] = out
         return out
 
 
 async def get_schema(table: str, jsonb_sample_size: int = 1000) -> dict[str, Any]:
     """Describe a table: columns, types, time column, JSONB key sample.
 
-    The ``table`` name is validated against :func:`list_data_sources`. Unknown
-    tables raise :class:`ValueError`.
+    The ``table`` name is validated against ``list_data_sources()``. Unknown
+    tables raise ``ValueError``.
     """
     sources = await list_data_sources()
     match = next((s for s in sources if s["name"] == table), None)

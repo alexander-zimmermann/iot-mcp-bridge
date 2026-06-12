@@ -10,6 +10,8 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
+from psycopg import sql
+
 from ..config import Settings
 from ..db import connection
 
@@ -31,42 +33,51 @@ async def detect_anomalies(
     until: str | None = None,
     limit: int = 100,
 ) -> dict[str, Any]:
-    """Recent anomaly rows, newest first. Filter by source, severity, or UC."""
+    """Recent anomaly rows, newest first. Filter by source, severity, or UC.
+
+    Returns at most ``limit`` rows (capped at ``query_row_limit``); when more
+    match, the newest ``limit`` are returned with ``truncated: true``.
+    """
     if severity and severity not in VALID_SEVERITY:
         raise ValueError(f"severity must be one of {VALID_SEVERITY}; got {severity!r}")
     limit = max(1, min(limit, settings.query_row_limit))
 
-    where = ["time >= now() - %s::interval"]
+    where: list[sql.Composable] = [sql.SQL("time >= now() - %s::interval")]
     params: list[Any] = [since]
     if until is not None:
-        where.append("time <= %s::timestamptz")
+        where.append(sql.SQL("time <= %s::timestamptz"))
         params.append(until)
     if source:
-        where.append("source = %s")
+        where.append(sql.SQL("source = %s"))
         params.append(source)
     if severity:
-        where.append("severity = %s")
+        where.append(sql.SQL("severity = %s"))
         params.append(severity)
     if uc:
-        where.append("uc = %s")
+        where.append(sql.SQL("uc = %s"))
         params.append(uc)
 
-    query = f"""
+    query = sql.SQL(
+        """
         SELECT time, created_at, source, metric, detector, severity, uc,
                actual, expected, score, payload
         FROM mcp_anomalies
-        WHERE {' AND '.join(where)}
+        WHERE {where}
         ORDER BY time DESC
         LIMIT %s
-    """
-    params.append(limit)
+        """
+    ).format(where=sql.SQL(" AND ").join(where))
+    params.append(limit + 1)
 
     async with connection() as conn, conn.cursor() as cur:
         await cur.execute(query, params)
         rows = await cur.fetchall()
 
+    truncated = len(rows) > limit
+    rows = rows[:limit]
     return {
         "row_count": len(rows),
+        "truncated": truncated,
         "rows": [_serialize(r) for r in rows],
     }
 
@@ -133,22 +144,24 @@ async def get_forecast(
     ``forecast-solar`` (PV) and ``score-seasonal`` (statsforecast)
     CronJobs."""
     horizon_hours = max(1, min(horizon_hours, 24 * 14))
-    where = [
-        "metric = %s",
-        "forecast_for BETWEEN now() AND now() + make_interval(hours => %s)",
+    where: list[sql.Composable] = [
+        sql.SQL("metric = %s"),
+        sql.SQL("forecast_for BETWEEN now() AND now() + make_interval(hours => %s)"),
     ]
     params: list[Any] = [metric, horizon_hours]
     if model:
-        where.append("model = %s")
+        where.append(sql.SQL("model = %s"))
         params.append(model)
 
-    query = f"""
+    query = sql.SQL(
+        """
         SELECT forecast_for, created_at, source, metric, model,
                forecast_value, forecast_lower, forecast_upper
         FROM mcp_forecasts
-        WHERE {' AND '.join(where)}
+        WHERE {where}
         ORDER BY forecast_for, model
-    """
+        """
+    ).format(where=sql.SQL(" AND ").join(where))
 
     async with connection() as conn, conn.cursor() as cur:
         await cur.execute(query, params)

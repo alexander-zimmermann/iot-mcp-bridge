@@ -203,7 +203,8 @@ async def test_jwks_refreshes_on_unknown_kid(keypair: RSAPrivateKey) -> None:
     jwk_v1 = _public_jwk(keypair, "key1")
     jwk_v2 = _public_jwk(keypair, "key2")
 
-    settings = _settings()
+    # Cooldown 0 — this test exercises the rotation refetch, not the rate limit.
+    settings = _settings(auth_jwks_min_refresh_seconds=0)
     with respx.mock(assert_all_called=False) as router:
         route = router.get(JWKS_URL).mock(
             side_effect=[
@@ -222,6 +223,62 @@ async def test_jwks_refreshes_on_unknown_kid(keypair: RSAPrivateKey) -> None:
         principal = await verify_token(token2, settings)
         assert principal is not None
         assert route.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_unknown_kid_within_cooldown_does_not_refetch(keypair: RSAPrivateKey) -> None:
+    """Unknown-kid tokens cannot force repeated JWKS fetches (issuer-DoS guard)."""
+    jwk_v1 = _public_jwk(keypair, "key1")
+
+    settings = _settings()  # default 30 s cooldown
+    with respx.mock(assert_all_called=False) as router:
+        route = router.get(JWKS_URL).mock(return_value=httpx.Response(200, json={"keys": [jwk_v1]}))
+        auth_module.configure(settings)
+
+        token1 = _sign(keypair, "key1", _claims())
+        assert await verify_token(token1, settings) is not None
+
+        foreign = _make_keypair()
+        token2 = _sign(foreign, "key-unknown", _claims())
+        with pytest.raises(AuthError, match="unknown_signing_key"):
+            await verify_token(token2, settings)
+        assert route.call_count == 1  # the rotation refetch was rate-limited
+
+
+@pytest.mark.asyncio
+async def test_jwks_outage_serves_stale_keys(keypair: RSAPrivateKey) -> None:
+    """A failing JWKS refresh falls back to the previously cached key set."""
+    jwk_v1 = _public_jwk(keypair, "key1")
+
+    settings = _settings(auth_jwks_ttl_seconds=0, auth_jwks_min_refresh_seconds=0)
+    with respx.mock(assert_all_called=False) as router:
+        router.get(JWKS_URL).mock(
+            side_effect=[
+                httpx.Response(200, json={"keys": [jwk_v1]}),
+                httpx.ConnectError("jwks down"),
+            ]
+        )
+        auth_module.configure(settings)
+
+        token = _sign(keypair, "key1", _claims())
+        assert await verify_token(token, settings) is not None  # prime (fetch 1)
+        # TTL 0 forces a refresh; the fetch fails but the stale set still validates.
+        assert await verify_token(token, settings) is not None
+
+
+@pytest.mark.asyncio
+async def test_jwks_outage_with_empty_cache_is_503(keypair: RSAPrivateKey) -> None:
+    """No cached keys + unreachable JWKS endpoint → 503-grade AuthError."""
+    settings = _settings()
+    with respx.mock(assert_all_called=False) as router:
+        router.get(JWKS_URL).mock(side_effect=httpx.ConnectError("jwks down"))
+        auth_module.configure(settings)
+
+        token = _sign(keypair, "key1", _claims())
+        with pytest.raises(AuthError) as exc_info:
+            await verify_token(token, settings)
+        assert exc_info.value.reason == "jwks_unavailable"
+        assert exc_info.value.status == 503
 
 
 # ------------- AuthMiddleware -------------
@@ -280,6 +337,23 @@ async def test_middleware_200_with_valid_token(
         r = await c.get("/mcp", headers={"Authorization": f"Bearer {token}"})
     assert r.status_code == 200
     assert r.text == "hello /mcp"
+
+
+@pytest.mark.asyncio
+async def test_middleware_503_when_jwks_unavailable(keypair: RSAPrivateKey) -> None:
+    """JWKS outage with no cached keys surfaces as 503, not 401 or a crash."""
+    settings = _settings()
+    with respx.mock(assert_all_called=False) as router:
+        router.get(JWKS_URL).mock(side_effect=httpx.ConnectError("jwks down"))
+        auth_module.configure(settings)
+
+        token = _sign(keypair, "key1", _claims())
+        app = _build_app(settings)
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="https://test") as c:
+            r = await c.get("/mcp", headers={"Authorization": f"Bearer {token}"})
+        assert r.status_code == 503
+        assert "www-authenticate" not in r.headers
 
 
 @pytest.mark.asyncio
