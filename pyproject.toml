@@ -4,7 +4,7 @@ version = "1.3.0"
 description = "MCP server bridging homelab IoT data (KNX, EMS, WARP, SolarEdge) to Claude.ai via TimescaleDB"
 readme = "README.md"
 license = "GPL-2.0-or-later"
-requires-python = ">=3.14.5"
+requires-python = ">=3.14.6"
 authors = [
     { name = "Alexander Zimmermann" },
 ]
@@ -36,7 +36,7 @@ dev = [
     "pytest-cov>=7.1.0",
     "testcontainers[postgres]>=4.14.2",
     "respx>=0.23.1",
-    "ruff>=0.15.16",
+    "ruff>=0.15.17",
     "mypy>=2.1.0",
     "types-PyYAML>=6.0.12.20260518",
     "pre-commit>=4.6.0",
