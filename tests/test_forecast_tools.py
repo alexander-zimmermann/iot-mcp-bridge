@@ -1,0 +1,76 @@
+"""Tests for the Phase-4 forecast read tools (get_pv_forecast)."""
+
+from __future__ import annotations
+
+from collections.abc import AsyncIterator
+
+import psycopg
+import pytest_asyncio
+from psycopg.rows import DictRow, dict_row
+
+from iot_mcp_bridge.config import Settings
+from iot_mcp_bridge.tools import forecasts
+
+
+@pytest_asyncio.fixture
+async def seeded_pv_forecast(settings: Settings, db_pool: None) -> AsyncIterator[None]:
+    """Seed 6 hourly forecast.solar PV rows — the (pv_production / forecast_solar)
+    triple get_pv_forecast pins on, deliberately distinct from the seasonal
+    job's (pv_production_avg / mstl) rows."""
+    conn = psycopg.Connection[DictRow].connect(
+        settings.db_dsn, autocommit=True, row_factory=dict_row
+    )
+    try:
+        conn.execute("TRUNCATE TABLE mcp_forecasts")
+        conn.execute(
+            """
+            INSERT INTO mcp_forecasts (forecast_for, source, metric, model,
+                                        forecast_value, forecast_lower, forecast_upper)
+            SELECT
+                NOW() + ((i + 1) || ' hours')::interval,
+                'forecast_solar',
+                'pv_production',
+                'forecast_solar',
+                500.0 + i * 250,
+                NULL,
+                NULL
+            FROM generate_series(0, 5) AS i
+            """
+        )
+    finally:
+        conn.close()
+    yield
+    conn = psycopg.connect(settings.db_dsn, autocommit=True)
+    try:
+        conn.execute("TRUNCATE TABLE mcp_forecasts")
+    finally:
+        conn.close()
+
+
+async def test_get_pv_forecast_returns_seeded_rows(
+    settings: Settings, seeded_pv_forecast: None
+) -> None:
+    result = await forecasts.get_pv_forecast(settings=settings, hours=24)
+    assert result["metric"] == "pv_production"
+    assert result["row_count"] == 6
+    assert "note" not in result
+    assert all(r["model"] == "forecast_solar" for r in result["rows"])
+
+
+async def test_get_pv_forecast_respects_horizon(
+    settings: Settings, seeded_pv_forecast: None
+) -> None:
+    # Only the first 3 hourly rows fall inside a 3h horizon.
+    result = await forecasts.get_pv_forecast(settings=settings, hours=3)
+    assert result["row_count"] == 3
+
+
+async def test_get_pv_forecast_empty_sets_note(settings: Settings, db_pool: None) -> None:
+    conn = psycopg.connect(settings.db_dsn, autocommit=True)
+    try:
+        conn.execute("TRUNCATE TABLE mcp_forecasts")
+    finally:
+        conn.close()
+    result = await forecasts.get_pv_forecast(settings=settings, hours=48)
+    assert result["row_count"] == 0
+    assert "check forecast-solar CronJob health" in result["note"]
