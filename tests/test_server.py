@@ -29,6 +29,7 @@ EXPECTED_TOOLS = {
     "explain_anomaly",
     "get_forecast",
     "get_pv_forecast",
+    "get_weather_forecast",
     "generate_insight_report",
     "get_current_state",
     "subscribe_nats",

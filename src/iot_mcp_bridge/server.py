@@ -469,6 +469,23 @@ async def get_pv_forecast(hours: int = 48) -> dict[str, Any]:
 
 
 @mcp.tool()
+async def get_weather_forecast(hours: int = 48) -> dict[str, Any]:
+    """Hour-by-hour weather forecast for the next ``hours``, each hour a dict
+    of metrics (temperature °C, cloud_cover %, precipitation mm,
+    solar_radiation W/m², wind_speed km/h).
+
+    Sourced from Open-Meteo (DWD ICON) via the ``forecast-weather`` batch job
+    — no live API call. A ``note`` field means the job hasn't populated the
+    requested window yet.
+    """
+    log.info("tool_invoked", tool="get_weather_forecast", hours=hours)
+    return await _instrumented(
+        "get_weather_forecast",
+        forecasts_tools.get_weather_forecast(settings=_require_settings(), hours=hours),
+    )
+
+
+@mcp.tool()
 async def generate_insight_report(
     timeframe: str = "1 week",
     top_n: int = 10,
