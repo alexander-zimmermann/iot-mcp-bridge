@@ -74,3 +74,71 @@ async def test_get_pv_forecast_empty_sets_note(settings: Settings, db_pool: None
     result = await forecasts.get_pv_forecast(settings=settings, hours=48)
     assert result["row_count"] == 0
     assert "check forecast-solar CronJob health" in result["note"]
+
+
+@pytest_asyncio.fixture
+async def seeded_weather_forecast(settings: Settings, db_pool: None) -> AsyncIterator[None]:
+    """Seed 2 forecast hours x 3 open_meteo metrics (6 rows) to exercise the
+    per-hour pivot."""
+    conn = psycopg.Connection[DictRow].connect(
+        settings.db_dsn, autocommit=True, row_factory=dict_row
+    )
+    try:
+        conn.execute("TRUNCATE TABLE mcp_forecasts")
+        conn.execute(
+            """
+            INSERT INTO mcp_forecasts (forecast_for, source, metric, model,
+                                        forecast_value, forecast_lower, forecast_upper)
+            SELECT
+                NOW() + ((h + 1) || ' hours')::interval,
+                'open_meteo',
+                m.metric,
+                'open_meteo',
+                m.value + h,
+                NULL,
+                NULL
+            FROM generate_series(0, 1) AS h
+            CROSS JOIN (VALUES ('temperature', 15.0), ('cloud_cover', 40.0),
+                               ('wind_speed', 3.0)) AS m(metric, value)
+            """
+        )
+    finally:
+        conn.close()
+    yield
+    conn = psycopg.connect(settings.db_dsn, autocommit=True)
+    try:
+        conn.execute("TRUNCATE TABLE mcp_forecasts")
+    finally:
+        conn.close()
+
+
+async def test_get_weather_forecast_pivots_per_hour(
+    settings: Settings, seeded_weather_forecast: None
+) -> None:
+    result = await forecasts.get_weather_forecast(settings=settings, hours=24)
+    assert result["model"] == "open_meteo"
+    # 2 distinct forecast hours, each a dict carrying all 3 metrics.
+    assert result["row_count"] == 2
+    assert "note" not in result
+    first = result["hours"][0]
+    assert {"forecast_for", "temperature", "cloud_cover", "wind_speed"} <= set(first)
+    assert first["temperature"] == 15.0
+
+
+async def test_get_weather_forecast_respects_horizon(
+    settings: Settings, seeded_weather_forecast: None
+) -> None:
+    # Only the first forecast hour falls inside a 1h horizon.
+    result = await forecasts.get_weather_forecast(settings=settings, hours=1)
+    assert result["row_count"] == 1
+
+
+async def test_get_weather_forecast_empty_sets_note(settings: Settings, db_pool: None) -> None:
+    conn = psycopg.connect(settings.db_dsn, autocommit=True)
+    try:
+        conn.execute("TRUNCATE TABLE mcp_forecasts")
+    finally:
+        conn.close()
+    result = await forecasts.get_weather_forecast(settings=settings, hours=48)
+    assert result["row_count"] == 0
+    assert "check forecast-weather CronJob health" in result["note"]
