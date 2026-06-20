@@ -31,6 +31,7 @@ from . import nats as nats_module
 from .config import Settings, load_settings
 from .logging_setup import configure_logging, get_logger
 from .tools import domain as domain_tools
+from .tools import forecasts as forecasts_tools
 from .tools import insights as insights_tools
 from .tools import live as live_tools
 from .tools import schema as schema_tools
@@ -449,6 +450,21 @@ async def get_forecast(
             horizon_hours=horizon_hours,
             model=model,
         ),
+    )
+
+
+@mcp.tool()
+async def get_pv_forecast(hours: int = 48) -> dict[str, Any]:
+    """Hour-by-hour PV production forecast (watts) for the next ``hours``.
+
+    Sourced from forecast.solar (already weather-adjusted) via the
+    ``forecast-solar`` batch job — no live API call. A ``note`` field means
+    the job hasn't populated the requested window yet.
+    """
+    log.info("tool_invoked", tool="get_pv_forecast", hours=hours)
+    return await _instrumented(
+        "get_pv_forecast",
+        forecasts_tools.get_pv_forecast(settings=_require_settings(), hours=hours),
     )
 
 
