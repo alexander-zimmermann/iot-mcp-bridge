@@ -26,6 +26,18 @@ def _fresh_sources_cache() -> None:
 TIMESCALEDB_IMAGE = "timescale/timescaledb:latest-pg17"
 
 
+def _connect(container: PostgresContainer) -> psycopg.Connection:
+    """Open an autocommit connection to the running testcontainer."""
+    return psycopg.connect(
+        host=container.get_container_host_ip(),
+        port=int(container.get_exposed_port(5432)),
+        user="test",
+        password="test",
+        dbname="homelab",
+        autocommit=True,
+    )
+
+
 @pytest.fixture(scope="session")
 def timescaledb_container() -> Iterator[PostgresContainer]:
     container = PostgresContainer(
@@ -33,16 +45,8 @@ def timescaledb_container() -> Iterator[PostgresContainer]:
     )
     container.start()
     try:
-        conn_kwargs = {
-            "host": container.get_container_host_ip(),
-            "port": int(container.get_exposed_port(5432)),
-            "user": "test",
-            "password": "test",
-            "dbname": "homelab",
-            "autocommit": True,
-        }
         # 1) Extension + tables + seed (regular DDL/DML, autocommit-safe).
-        conn = psycopg.connect(**conn_kwargs)
+        conn = _connect(container)
         try:
             conn.execute("CREATE EXTENSION IF NOT EXISTS timescaledb")
             _seed(conn)
@@ -53,7 +57,7 @@ def timescaledb_container() -> Iterator[PostgresContainer]:
         # run outside any transaction block — fresh connection per CAGG keeps
         # psycopg from wrapping them in an implicit BEGIN.
         for cagg_sql, refresh_sql in _CAGGS:
-            conn = psycopg.connect(**conn_kwargs)
+            conn = _connect(container)
             try:
                 conn.execute(cagg_sql)
                 conn.execute(refresh_sql)
