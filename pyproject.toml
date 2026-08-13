@@ -17,7 +17,7 @@ classifiers = [
 ]
 dependencies = [
     "fastmcp>=3.4.7",
-    "uvicorn[standard]>=0.52.1",
+    "uvicorn[standard]>=0.52.3",
     "psycopg[binary,pool]>=3.3.4",
     "pydantic>=2.13.4",
     "pydantic-settings>=2.15.0",
@@ -36,7 +36,7 @@ dev = [
     "pytest-cov>=7.1.0",
     "testcontainers[postgres]>=4.15.0",
     "respx>=0.23.1",
-    "ruff>=0.16.2",
+    "ruff>=0.16.3",
     "mypy>=2.3.0",
     "types-PyYAML>=6.0.12.20260724",
     "pre-commit>=4.6.2",
