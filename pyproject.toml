@@ -18,13 +18,13 @@ classifiers = [
 dependencies = [
     "fastmcp>=3.4.7",
     "uvicorn[standard]>=0.52.4",
-    "psycopg[binary,pool]>=3.3.4",
+    "psycopg[binary,pool]>=3.3.5",
     "pydantic>=2.13.5",
     "pydantic-settings>=2.15.0",
     "structlog>=26.1.0",
     "pyjwt[crypto]>=2.13.0",
     "httpx>=0.28.1",
-    "cachetools>=7.1.7",
+    "cachetools>=7.1.8",
     "prometheus-client>=0.26.0",
     "nats-py[nkeys]>=2.15.0",
 ]
