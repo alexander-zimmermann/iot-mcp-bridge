@@ -1,4 +1,5 @@
-"""Tests for the Phase-4 forecast read tools (get_pv_forecast)."""
+"""Tests for the forecast read tools (get_forecast, get_pv_forecast,
+get_weather_forecast)."""
 
 from __future__ import annotations
 
@@ -142,3 +143,55 @@ async def test_get_weather_forecast_empty_sets_note(settings: Settings, db_pool:
     result = await forecasts.get_weather_forecast(settings=settings, hours=48)
     assert result["row_count"] == 0
     assert "check forecast-weather CronJob health" in result["note"]
+
+
+# =====================================================================
+# get_forecast — the generic read the two above specialise
+# =====================================================================
+
+
+@pytest_asyncio.fixture
+async def seeded_seasonal_forecast(settings: Settings, db_pool: None) -> AsyncIterator[None]:
+    """Seed 4 hourly rows under the seasonal job's (pv_production_avg / mstl)
+    triple, which get_forecast reads by metric."""
+    conn = psycopg.connect(settings.db_dsn, autocommit=True)
+    try:
+        conn.execute("TRUNCATE TABLE mcp_forecasts")
+        conn.execute(
+            """
+            INSERT INTO mcp_forecasts (forecast_for, source, metric, model,
+                                        forecast_value, forecast_lower, forecast_upper)
+            SELECT
+                NOW() + ((i + 1) || ' hours')::interval,
+                'solaredge_powerflow_1h',
+                'pv_production_avg',
+                'mstl',
+                4000.0 + i * 100,
+                3500.0 + i * 100,
+                4500.0 + i * 100
+            FROM generate_series(0, 3) AS i
+            """
+        )
+    finally:
+        conn.close()
+    yield
+    conn = psycopg.connect(settings.db_dsn, autocommit=True)
+    try:
+        conn.execute("TRUNCATE TABLE mcp_forecasts")
+    finally:
+        conn.close()
+
+
+async def test_get_forecast_returns_seeded_rows(
+    settings: Settings, seeded_seasonal_forecast: None
+) -> None:
+    result = await forecasts.get_forecast(settings=settings, metric="pv_production_avg")
+    assert result["metric"] == "pv_production_avg"
+    assert result["row_count"] == 4
+
+
+async def test_get_forecast_unknown_metric_empty(
+    settings: Settings, seeded_seasonal_forecast: None
+) -> None:
+    result = await forecasts.get_forecast(settings=settings, metric="does_not_exist")
+    assert result["row_count"] == 0

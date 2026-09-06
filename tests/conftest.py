@@ -286,29 +286,8 @@ def _seed(conn: psycopg.Connection) -> None:
         """
     )
 
-    # mcp_anomalies + mcp_forecasts — Phase-2 write targets. Schema mirrors
-    # the production bootstrap.sql; the toolkit-based baseline-CAGGs are
-    # skipped here (the test image is plain timescaledb without toolkit),
-    # so detect_univariate's SQL is covered by cluster smoke-tests instead.
-    conn.execute(
-        """
-        CREATE TABLE mcp_anomalies (
-            time       TIMESTAMPTZ      NOT NULL,
-            created_at TIMESTAMPTZ      NOT NULL DEFAULT now(),
-            source     TEXT             NOT NULL,
-            metric     TEXT             NOT NULL,
-            detector   TEXT             NOT NULL,
-            severity   TEXT             NOT NULL CHECK (severity IN ('info','warning','critical')),
-            uc         TEXT,
-            actual     DOUBLE PRECISION,
-            expected   DOUBLE PRECISION,
-            score      DOUBLE PRECISION,
-            payload    JSONB,
-            PRIMARY KEY (time, source, metric, detector)
-        )
-        """
-    )
-    conn.execute("SELECT create_hypertable('mcp_anomalies', by_range('time'))")
+    # mcp_forecasts — the batch jobs' write target. Schema mirrors the
+    # production bootstrap.sql.
     conn.execute(
         """
         CREATE TABLE mcp_forecasts (

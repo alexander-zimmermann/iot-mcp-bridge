@@ -41,14 +41,11 @@ behind high-level questions:
 | `query_unifi_events(from_ts, to_ts, camera, …)`       | Recent UniFi Protect Alarm Manager events (person/vehicle/motion detections per camera) for security review.                                                                          |
 | `correlate_events(source_a, source_b, …)`             | Lagged Pearson correlation between two time-series streams. Each `source` is `{table, column}`; returns the best lag plus the top 10 by `\|corr\|`.                                   |
 
-**Insights** (read-only views into the anomaly/forecast tables populated by [iot-insights-engine](https://github.com/alexander-zimmermann/iot-insights-engine) batch jobs)
+**Forecasts** (read-only views into the forecast table populated by [iot-insights-engine](https://github.com/alexander-zimmermann/iot-insights-engine) batch jobs)
 
 | Tool                                            | What it does                                                                                       |
 | ----------------------------------------------- | -------------------------------------------------------------------------------------------------- |
-| `detect_anomalies(source, severity, uc, …)`     | Recent anomaly rows, newest first, filterable by source/severity/use-case.                         |
-| `explain_anomaly(time, source, metric, …)`      | One anomaly by composite key plus the surrounding context window of the same (source, metric).     |
 | `get_forecast(metric, horizon_hours, model)`    | Stored model forecasts (PV via Forecast.Solar, seasonal via statsforecast).                        |
-| `generate_insight_report(timeframe, top_n)`     | Aggregate anomaly summary (severity counts, top use-cases, recent serious entries) for a digest.   |
 
 **Live** (current state straight from NATS JetStream; requires `MCP_NATS_ENABLED=true`)
 
