@@ -32,7 +32,6 @@ from .config import Settings, load_settings
 from .logging_setup import configure_logging, get_logger
 from .tools import domain as domain_tools
 from .tools import forecasts as forecasts_tools
-from .tools import insights as insights_tools
 from .tools import live as live_tools
 from .tools import schema as schema_tools
 from .tools import timeseries as timeseries_tools
@@ -343,87 +342,6 @@ async def correlate_events(
 
 
 @mcp.tool()
-async def detect_anomalies(
-    source: str | None = None,
-    severity: str | None = None,
-    uc: str | None = None,
-    since: str = "1 day",
-    until: str | None = None,
-    limit: int = 100,
-) -> dict[str, Any]:
-    """Anomalies flagged by the batch jobs over the recent past.
-
-    Filters AND-combined:
-    * ``source``   — source-CAGG name (e.g. ``"ems_esp_boiler_1h"``)
-    * ``severity`` — one of ``"info"``, ``"warning"``, ``"critical"``
-    * ``uc``       — use-case slug (e.g. ``"boiler_curburnpow"``,
-                     ``"pv_production"``)
-    * ``since``    — Postgres interval, default ``"1 day ago"``
-    * ``until``    — optional upper bound ISO timestamp
-
-    Newest first. ``limit`` capped at the server's ``query_row_limit``;
-    when more rows match, the newest ``limit`` are returned with
-    ``truncated: true``.
-    """
-    log.info(
-        "tool_invoked",
-        tool="detect_anomalies",
-        source=source,
-        severity=severity,
-        uc=uc,
-        since=since,
-        limit=limit,
-    )
-    return await _instrumented(
-        "detect_anomalies",
-        insights_tools.detect_anomalies(
-            settings=_require_settings(),
-            source=source,
-            severity=severity,
-            uc=uc,
-            since=since,
-            until=until,
-            limit=limit,
-        ),
-    )
-
-
-@mcp.tool()
-async def explain_anomaly(
-    time: str,
-    source: str,
-    metric: str,
-    detector: str,
-    context_hours: int = 24,
-) -> dict[str, Any]:
-    """Look up a specific anomaly by its composite key and return the
-    surrounding ``context_hours`` window of the same (source, metric).
-
-    Use the four fields from a ``detect_anomalies`` result row to
-    identify the anomaly.
-    """
-    log.info(
-        "tool_invoked",
-        tool="explain_anomaly",
-        source=source,
-        metric=metric,
-        detector=detector,
-        context_hours=context_hours,
-    )
-    return await _instrumented(
-        "explain_anomaly",
-        insights_tools.explain_anomaly(
-            settings=_require_settings(),
-            time=time,
-            source=source,
-            metric=metric,
-            detector=detector,
-            context_hours=context_hours,
-        ),
-    )
-
-
-@mcp.tool()
 async def get_forecast(
     metric: str,
     horizon_hours: int = 24,
@@ -444,7 +362,7 @@ async def get_forecast(
     )
     return await _instrumented(
         "get_forecast",
-        insights_tools.get_forecast(
+        forecasts_tools.get_forecast(
             settings=_require_settings(),
             metric=metric,
             horizon_hours=horizon_hours,
@@ -482,33 +400,6 @@ async def get_weather_forecast(hours: int = 48) -> dict[str, Any]:
     return await _instrumented(
         "get_weather_forecast",
         forecasts_tools.get_weather_forecast(settings=_require_settings(), hours=hours),
-    )
-
-
-@mcp.tool()
-async def generate_insight_report(
-    timeframe: str = "1 week",
-    top_n: int = 10,
-) -> dict[str, Any]:
-    """Aggregate anomaly summary over ``timeframe`` for a Markdown digest.
-
-    Returns severity counts, the top-N (uc, severity) by count, and the
-    ``top_n`` most recent warning/critical entries. Compose the prose
-    yourself — the tool only returns structured data.
-    """
-    log.info(
-        "tool_invoked",
-        tool="generate_insight_report",
-        timeframe=timeframe,
-        top_n=top_n,
-    )
-    return await _instrumented(
-        "generate_insight_report",
-        insights_tools.generate_insight_report(
-            settings=_require_settings(),
-            timeframe=timeframe,
-            top_n=top_n,
-        ),
     )
 
 
