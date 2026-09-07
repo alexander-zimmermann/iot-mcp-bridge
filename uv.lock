@@ -789,7 +789,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "cachetools", specifier = ">=7.1.8" },
-    { name = "fastmcp", specifier = ">=4.0.2" },
+    { name = "fastmcp", specifier = ">=4.0.3" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=2.3.1" },
     { name = "nats-py", extras = ["nkeys"], specifier = ">=2.15.0" },
@@ -803,10 +803,10 @@ requires-dist = [
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=1.4.0" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=7.1.0" },
     { name = "respx", marker = "extra == 'dev'", specifier = ">=0.23.1" },
-    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.16.5" },
+    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.16.6" },
     { name = "structlog", specifier = ">=26.1.0" },
     { name = "testcontainers", extras = ["postgres"], marker = "extra == 'dev'", specifier = ">=4.15.0" },
-    { name = "types-pyyaml", marker = "extra == 'dev'", specifier = ">=6.0.12.20260815" },
+    { name = "types-pyyaml", marker = "extra == 'dev'", specifier = ">=6.0.12.20260906" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.52.4" },
 ]
 provides-extras = ["dev"]
