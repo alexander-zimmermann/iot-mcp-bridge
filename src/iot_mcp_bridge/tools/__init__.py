@@ -1,6 +1,7 @@
-"""MCP tool implementations, grouped by layer: schema discovery, generic
-time-series aggregation, domain queries, forecasts, and live NATS state."""
+"""MCP tool implementations, grouped by layer: data-source discovery, generic
+time-series aggregation, domain queries, forecasts, the verdict loop, and live
+NATS state."""
 
-from . import domain, forecasts, live, schema, timeseries
+from . import domain, episodes, forecasts, live, sources, timeseries
 
-__all__ = ["domain", "forecasts", "live", "schema", "timeseries"]
+__all__ = ["domain", "episodes", "forecasts", "live", "sources", "timeseries"]

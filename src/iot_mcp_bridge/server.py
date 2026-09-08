@@ -34,7 +34,7 @@ from .tools import domain as domain_tools
 from .tools import episodes as episode_tools
 from .tools import forecasts as forecasts_tools
 from .tools import live as live_tools
-from .tools import schema as schema_tools
+from .tools import sources as sources_tools
 from .tools import timeseries as timeseries_tools
 
 log = get_logger(__name__)
@@ -70,7 +70,7 @@ async def list_data_sources() -> list[dict[str, Any]]:
     ``get_schema`` or ``query_timeseries``.
     """
     log.info("tool_invoked", tool="list_data_sources")
-    return await _instrumented("list_data_sources", schema_tools.list_data_sources())
+    return await _instrumented("list_data_sources", sources_tools.list_data_sources())
 
 
 @mcp.tool()
@@ -82,7 +82,7 @@ async def get_schema(table: str) -> dict[str, Any]:
     ``raw->>'<key>'`` expressions.
     """
     log.info("tool_invoked", tool="get_schema", table=table)
-    return await _instrumented("get_schema", schema_tools.get_schema(table))
+    return await _instrumented("get_schema", sources_tools.get_schema(table))
 
 
 @mcp.tool()
@@ -119,7 +119,6 @@ async def query_timeseries(
             columns=columns,
             from_ts=from_ts,
             to_ts=to_ts,
-            settings=_require_settings(),
             aggregation=aggregation,  # type: ignore[arg-type]
             bucket=bucket,
             filters=filters,
@@ -141,9 +140,7 @@ async def query_energy_flow(
     log.info("tool_invoked", tool="query_energy_flow", bucket=bucket)
     return await _instrumented(
         "query_energy_flow",
-        domain_tools.query_energy_flow(
-            from_ts=from_ts, to_ts=to_ts, settings=_require_settings(), bucket=bucket
-        ),
+        domain_tools.query_energy_flow(from_ts=from_ts, to_ts=to_ts, bucket=bucket),
     )
 
 
@@ -165,7 +162,6 @@ async def query_heating_cycles(
         domain_tools.query_heating_cycles(
             from_ts=from_ts,
             to_ts=to_ts,
-            settings=_require_settings(),
             min_duration_seconds=min_duration_seconds,
         ),
     )
@@ -193,7 +189,6 @@ async def query_room_climate(
             room=room,
             from_ts=from_ts,
             to_ts=to_ts,
-            settings=_require_settings(),
             bucket=bucket,
             functions=functions,
         ),
@@ -242,7 +237,6 @@ async def query_knx_events(
         domain_tools.query_knx_events(
             from_ts=from_ts,
             to_ts=to_ts,
-            settings=_require_settings(),
             room=room,
             ga=ga,
             name=name,
@@ -297,7 +291,6 @@ async def query_unifi_events(
         domain_tools.query_unifi_events(
             from_ts=from_ts,
             to_ts=to_ts,
-            settings=_require_settings(),
             camera=camera,
             detection_type=detection_type,
             event_type=event_type,
@@ -335,7 +328,6 @@ async def correlate_events(
             source_b=source_b,
             from_ts=from_ts,
             to_ts=to_ts,
-            settings=_require_settings(),
             window=window,
             bucket=bucket,
         ),
@@ -364,7 +356,6 @@ async def get_forecast(
     return await _instrumented(
         "get_forecast",
         forecasts_tools.get_forecast(
-            settings=_require_settings(),
             metric=metric,
             horizon_hours=horizon_hours,
             model=model,
@@ -383,7 +374,7 @@ async def get_pv_forecast(hours: int = 48) -> dict[str, Any]:
     log.info("tool_invoked", tool="get_pv_forecast", hours=hours)
     return await _instrumented(
         "get_pv_forecast",
-        forecasts_tools.get_pv_forecast(settings=_require_settings(), hours=hours),
+        forecasts_tools.get_pv_forecast(hours=hours),
     )
 
 
@@ -400,7 +391,7 @@ async def get_weather_forecast(hours: int = 48) -> dict[str, Any]:
     log.info("tool_invoked", tool="get_weather_forecast", hours=hours)
     return await _instrumented(
         "get_weather_forecast",
-        forecasts_tools.get_weather_forecast(settings=_require_settings(), hours=hours),
+        forecasts_tools.get_weather_forecast(hours=hours),
     )
 
 
@@ -441,7 +432,6 @@ async def list_episodes(
     return await _instrumented(
         "list_episodes",
         episode_tools.list_episodes(
-            settings=_require_settings(),
             state=state,  # type: ignore[arg-type]
             episode_id=episode_id,
             fault=fault,
@@ -469,9 +459,7 @@ async def set_episode_verdict(episode_id: int, verdict: str) -> dict[str, Any]:
     log.info("tool_invoked", tool="set_episode_verdict", episode_id=episode_id, verdict=verdict)
     return await _instrumented(
         "set_episode_verdict",
-        episode_tools.set_episode_verdict(
-            settings=_require_settings(), episode_id=episode_id, verdict=verdict
-        ),
+        episode_tools.set_episode_verdict(episode_id=episode_id, verdict=verdict),
     )
 
 
@@ -497,7 +485,9 @@ async def get_current_state(
     return await _instrumented(
         "get_current_state",
         live_tools.get_current_state(
-            domain=domain, settings=_require_settings(), identifier=identifier
+            domain,
+            identifier,
+            stale_after_seconds=_require_settings().live_stale_seconds,
         ),
     )
 
@@ -521,7 +511,9 @@ async def subscribe_nats(
     return await _instrumented(
         "subscribe_nats",
         live_tools.subscribe_nats(
-            subject=subject, settings=_require_settings(), duration_seconds=duration_seconds
+            subject,
+            duration_seconds,
+            max_duration_seconds=_require_settings().subscribe_max_seconds,
         ),
     )
 
@@ -556,7 +548,6 @@ async def get_current_knx(
     return await _instrumented(
         "get_current_knx",
         live_tools.get_current_knx(
-            settings=_require_settings(),
             room=room,
             function=function,
             name=name,

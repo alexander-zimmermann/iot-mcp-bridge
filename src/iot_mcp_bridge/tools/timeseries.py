@@ -2,16 +2,14 @@
 
 from __future__ import annotations
 
-import re
 from datetime import datetime
 from typing import Any, Literal, LiteralString
 
 from psycopg import sql
 
-from .. import metrics as metrics_module
-from ..config import Settings
-from ..db import connection
-from .schema import KIND_CONTINUOUS_AGGREGATE, get_schema, list_data_sources
+from .. import db
+from ..interval import Interval
+from . import sources
 
 Aggregation = Literal["avg", "sum", "min", "max", "count"]
 _AGG_FUNCS: dict[Aggregation, LiteralString] = {
@@ -21,53 +19,6 @@ _AGG_FUNCS: dict[Aggregation, LiteralString] = {
     "max": "MAX",
     "count": "COUNT",
 }
-
-# Postgres interval literal — accept things like '1 hour', '15 minutes', '1 day'.
-_INTERVAL_RE = re.compile(
-    r"^\s*\d+\s*(second|seconds|minute|minutes|hour|hours|day|days|week|weeks|month|months)\s*$",
-    re.IGNORECASE,
-)
-
-
-def _validate_interval(bucket: str) -> str:
-    if not _INTERVAL_RE.match(bucket):
-        raise ValueError(f"invalid_bucket_interval: {bucket!r}")
-    return bucket
-
-
-def _coarser_or_equal_to_hour(bucket: str) -> bool:
-    n_str, unit = bucket.split(maxsplit=1)
-    n = int(n_str)
-    unit = unit.lower().rstrip("s")
-    if unit == "hour":
-        return n >= 1
-    return unit in {"day", "week", "month"}
-
-
-async def _resolve_table(
-    requested: str,
-    bucket: str,
-) -> tuple[str, str, str, str]:
-    """Pick the table to query (auto-route to *_1h CAGG when possible).
-
-    Returns ``(target_name, target_schema, target_kind, time_column)``.
-    """
-    sources = await list_data_sources()
-    by_name = {s["name"]: s for s in sources}
-    if requested not in by_name:
-        raise ValueError(f"unknown_table: {requested}")
-
-    chosen = by_name[requested]
-    if (
-        chosen["kind"] != KIND_CONTINUOUS_AGGREGATE
-        and _coarser_or_equal_to_hour(bucket)
-        and (cagg := by_name.get(f"{requested}_1h"))
-    ):
-        chosen = cagg
-
-    if chosen["time_column"] is None:
-        raise ValueError(f"no_time_column_detected: {chosen['name']}")
-    return chosen["name"], chosen["schema"], chosen["kind"], chosen["time_column"]
 
 
 def _validate_filters(
@@ -87,7 +38,6 @@ async def query_timeseries(
     columns: list[str],
     from_ts: str | datetime,
     to_ts: str | datetime,
-    settings: Settings,
     aggregation: Aggregation = "avg",
     bucket: str = "1 hour",
     filters: dict[str, Any] | None = None,
@@ -103,22 +53,20 @@ async def query_timeseries(
     """
     if aggregation not in _AGG_FUNCS:
         raise ValueError(f"invalid_aggregation: {aggregation!r}")
-    bucket = _validate_interval(bucket)
+    width = Interval.parse(bucket)
 
-    target, target_schema, target_kind, time_col = await _resolve_table(table, bucket)
-
-    schema = await get_schema(target)
+    source = await sources.resolve(table, width)
+    schema = await sources.get_schema(source.name)
     valid_cols = {c["name"] for c in schema["columns"]}
     unknown = [c for c in columns if c not in valid_cols]
     if unknown:
         raise ValueError(f"unknown_columns: {unknown}")
-    cols = columns
     flt = _validate_filters(filters, valid_cols)
 
     select_parts: list[sql.Composable] = [
-        sql.SQL("time_bucket(%s, {col}) AS bucket").format(col=sql.Identifier(time_col))
+        sql.SQL("time_bucket(%s, {col}) AS bucket").format(col=sql.Identifier(source.time_column))
     ]
-    for c in cols:
+    for c in columns:
         select_parts.append(
             sql.SQL("{fn}({col}) AS {alias}").format(
                 fn=sql.SQL(_AGG_FUNCS[aggregation]),
@@ -128,44 +76,34 @@ async def query_timeseries(
         )
 
     where_parts: list[sql.Composable] = [
-        sql.SQL("{col} BETWEEN %s AND %s").format(col=sql.Identifier(time_col))
+        sql.SQL("{col} BETWEEN %s AND %s").format(col=sql.Identifier(source.time_column))
     ]
-    params: list[Any] = [bucket, from_ts, to_ts]
+    params: list[Any] = [str(width), from_ts, to_ts]
     for k, v in flt.items():
         where_parts.append(sql.SQL("{col} = %s").format(col=sql.Identifier(k)))
         params.append(v)
 
-    row_limit = settings.query_row_limit
     stmt = sql.SQL(
-        "SELECT {selects} FROM {tbl} WHERE {where} GROUP BY bucket ORDER BY bucket LIMIT %s"
+        "SELECT {selects} FROM {tbl} WHERE {where} GROUP BY bucket ORDER BY bucket"
     ).format(
         selects=sql.SQL(", ").join(select_parts),
-        tbl=sql.Identifier(target_schema, target),
+        tbl=sql.Identifier(source.schema, source.name),
         where=sql.SQL(" AND ").join(where_parts),
     )
-    params.append(row_limit + 1)
-
-    m = metrics_module.get()
-    m.db_queries.labels(tool="query_timeseries", table_used=target).inc()
-    with m.db_query_duration.labels(tool="query_timeseries").time():
-        async with connection() as conn:
-            rows = await (await conn.execute(stmt, params)).fetchall()
-
-    if len(rows) > row_limit:
-        raise ValueError(
-            f"row_limit_exceeded: result would exceed {row_limit} rows; "
-            "widen the bucket or shorten the time range"
-        )
+    result = await db.read(
+        "query_timeseries",
+        source.name,
+        stmt,
+        params,
+        hint="widen the bucket or shorten the time range",
+    )
 
     return {
         "table_requested": table,
-        "table_used": target,
-        "kind_used": target_kind,
-        "bucket": bucket,
+        "table_used": source.name,
+        "kind_used": source.kind,
+        "bucket": str(width),
         "aggregation": aggregation,
-        "row_count": len(rows),
-        "rows": [
-            {k: (v.isoformat() if isinstance(v, datetime) else v) for k, v in row.items()}
-            for row in rows
-        ],
+        "row_count": len(result.rows),
+        "rows": result.rows,
     }

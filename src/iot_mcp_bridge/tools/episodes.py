@@ -16,14 +16,11 @@ the server's only write, and it goes through the separate write pool.
 
 from __future__ import annotations
 
-from datetime import datetime
 from typing import Any, Literal, get_args
 
 from psycopg import sql
 
-from .. import metrics as metrics_module
-from ..config import Settings
-from ..db import connection, write_connection
+from .. import db
 
 # Binary by design — nobody sustains a richer scale, and for the only
 # question that matters (how often does this fault get it wrong) it is enough.
@@ -43,13 +40,8 @@ _CATALOG_JOIN = sql.SQL(
 )
 
 
-def _serialize(row: dict[str, Any]) -> dict[str, Any]:
-    return {k: (v.isoformat() if isinstance(v, datetime) else v) for k, v in row.items()}
-
-
 async def list_episodes(
     *,
-    settings: Settings,
     state: EpisodeState = "all",
     episode_id: int | None = None,
     fault: str | None = None,
@@ -64,8 +56,6 @@ async def list_episodes(
     weeks ago and is still open is exactly what a review needs to see. Pass
     ``episode_id`` to read one episode back regardless of how old it is.
     """
-    if limit <= 0:
-        raise ValueError(f"invalid_limit: {limit}")
     if state not in get_args(EpisodeState):
         raise ValueError(
             f"invalid_state: {state!r}; must be one of {', '.join(get_args(EpisodeState))}"
@@ -73,7 +63,6 @@ async def list_episodes(
     if days <= 0:
         raise ValueError(f"invalid_days: {days}")
     days = min(days, _MAX_WINDOW_DAYS)
-    effective_limit = min(limit, settings.query_row_limit)
 
     # A named episode is answered whatever its age — the window is for
     # browsing, not for hiding a verdict somebody just wrote.
@@ -96,7 +85,6 @@ async def list_episodes(
         params.append(fault)
     if only_unjudged:
         where_parts.append(sql.SQL("v.verdict IS NULL"))
-    params.append(effective_limit + 1)
 
     stmt = sql.SQL(
         """
@@ -111,35 +99,24 @@ async def list_episodes(
         LEFT JOIN episode_verdicts v ON v.episode_id = e.id
         WHERE {where}
         ORDER BY e.started_at DESC
-        LIMIT %s
         """
     ).format(catalog=_CATALOG_JOIN, where=sql.SQL(" AND ").join(where_parts))
+    result = await db.read(
+        "list_episodes", "episodes", stmt, params, limit=limit, overflow="truncate"
+    )
 
-    m = metrics_module.get()
-    m.db_queries.labels(tool="list_episodes", table_used="episodes").inc()
-    with m.db_query_duration.labels(tool="list_episodes").time():
-        async with connection() as conn:
-            rows = await (await conn.execute(stmt, params)).fetchall()
-
-    truncated = len(rows) > effective_limit
-    rows = rows[:effective_limit]
     return {
         "state": state,
         "days": None if episode_id is not None else days,
         "filters": {"episode_id": episode_id, "fault": fault, "only_unjudged": only_unjudged},
-        "limit": effective_limit,
-        "row_count": len(rows),
-        "truncated": truncated,
-        "episodes": [_serialize(r) for r in rows],
+        "limit": result.limit,
+        "row_count": len(result.rows),
+        "truncated": result.truncated,
+        "episodes": result.rows,
     }
 
 
-async def set_episode_verdict(
-    *,
-    settings: Settings,  # noqa: ARG001 — keep signature consistent with the other tools
-    episode_id: int,
-    verdict: str,
-) -> dict[str, Any]:
+async def set_episode_verdict(*, episode_id: int, verdict: str) -> dict[str, Any]:
     """Record ``verdict`` on one episode, overwriting any earlier one.
 
     One row per episode by primary key, so a second thought replaces the
@@ -148,32 +125,26 @@ async def set_episode_verdict(
     if verdict not in VERDICTS:
         raise ValueError(f"invalid_verdict: {verdict!r}; must be one of {', '.join(VERDICTS)}")
 
-    m = metrics_module.get()
-    m.db_queries.labels(tool="set_episode_verdict", table_used="episode_verdicts").inc()
-    with m.db_query_duration.labels(tool="set_episode_verdict").time():
-        async with write_connection() as conn:
-            episode = await (
-                await conn.execute(
-                    "SELECT fault, subject FROM episodes WHERE id = %s", (episode_id,)
-                )
-            ).fetchone()
-            if episode is None:
-                raise ValueError(
-                    f"unknown_episode: {episode_id}; call list_episodes to find a valid id"
-                )
-            written = await (
-                await conn.execute(
-                    """
-                    INSERT INTO episode_verdicts (episode_id, verdict)
-                    VALUES (%s, %s)
-                    ON CONFLICT (episode_id)
-                    DO UPDATE SET verdict = EXCLUDED.verdict, decided_at = now()
-                    RETURNING episode_id, verdict, decided_at
-                    """,
-                    (episode_id, verdict),
-                )
-            ).fetchone()
+    named = await db.lookup(
+        "set_episode_verdict",
+        "episodes",
+        "SELECT fault, subject FROM episodes WHERE id = %s",
+        (episode_id,),
+    )
+    if not named:
+        raise ValueError(f"unknown_episode: {episode_id}; call list_episodes to find a valid id")
+    episode = named[0]
 
-    if written is None:  # INSERT … RETURNING always yields the row
-        raise RuntimeError(f"verdict write for episode {episode_id} returned no row")
-    return _serialize({**written, "fault": episode["fault"], "subject": episode["subject"]})
+    written = await db.write(
+        "set_episode_verdict",
+        "episode_verdicts",
+        """
+        INSERT INTO episode_verdicts (episode_id, verdict)
+        VALUES (%s, %s)
+        ON CONFLICT (episode_id)
+        DO UPDATE SET verdict = EXCLUDED.verdict, decided_at = now()
+        RETURNING episode_id, verdict, decided_at
+        """,
+        (episode_id, verdict),
+    )
+    return {**written[0], "fault": episode["fault"], "subject": episode["subject"]}

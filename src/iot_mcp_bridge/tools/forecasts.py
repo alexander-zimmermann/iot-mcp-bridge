@@ -10,13 +10,11 @@ themselves, and none of them write.
 
 from __future__ import annotations
 
-from datetime import datetime
 from typing import Any
 
 from psycopg import sql
 
-from ..config import Settings
-from ..db import connection
+from .. import db
 
 # forecast-solar CronJob writes PV production (watts) under this triple.
 PV_METRIC = "pv_production"
@@ -27,13 +25,8 @@ WEATHER_MODEL = "open_meteo"
 _MAX_HORIZON_HOURS = 24 * 14
 
 
-def _serialize(row: dict[str, Any]) -> dict[str, Any]:
-    return {k: (v.isoformat() if isinstance(v, datetime) else v) for k, v in row.items()}
-
-
 async def get_forecast(
     *,
-    settings: Settings,  # noqa: ARG001 — keep signature consistent with the other tools
     metric: str,
     horizon_hours: int = 24,
     model: str | None = None,
@@ -42,7 +35,7 @@ async def get_forecast(
     ``horizon_hours`` hours. Read-only — rows are populated by the
     ``forecast-solar`` (PV) and ``score-seasonal`` (statsforecast)
     CronJobs."""
-    horizon_hours = max(1, min(horizon_hours, 24 * 14))
+    horizon_hours = max(1, min(horizon_hours, _MAX_HORIZON_HOURS))
     where: list[sql.Composable] = [
         sql.SQL("metric = %s"),
         sql.SQL("forecast_for BETWEEN now() AND now() + make_interval(hours => %s)"),
@@ -52,7 +45,7 @@ async def get_forecast(
         where.append(sql.SQL("model = %s"))
         params.append(model)
 
-    query = sql.SQL(
+    stmt = sql.SQL(
         """
         SELECT forecast_for, created_at, source, metric, model,
                forecast_value, forecast_lower, forecast_upper
@@ -61,20 +54,18 @@ async def get_forecast(
         ORDER BY forecast_for, model
         """
     ).format(where=sql.SQL(" AND ").join(where))
-
-    async with connection() as conn, conn.cursor() as cur:
-        await cur.execute(query, params)
-        rows = await cur.fetchall()
+    result = await db.read("get_forecast", "mcp_forecasts", stmt, params, overflow="truncate")
 
     return {
         "metric": metric,
         "horizon_hours": horizon_hours,
-        "row_count": len(rows),
-        "rows": [_serialize(r) for r in rows],
+        "row_count": len(result.rows),
+        "truncated": result.truncated,
+        "rows": result.rows,
     }
 
 
-async def get_pv_forecast(*, settings: Settings, hours: int = 48) -> dict[str, Any]:
+async def get_pv_forecast(*, hours: int = 48) -> dict[str, Any]:
     """Hour-by-hour PV production forecast (watts) for the next ``hours``.
 
     Specialises ``get_forecast`` to the forecast.solar rows so the caller
@@ -82,22 +73,13 @@ async def get_pv_forecast(*, settings: Settings, hours: int = 48) -> dict[str, A
     hasn't populated the requested window, ``note`` flags it instead of
     silently returning an empty list.
     """
-    result = await get_forecast(
-        settings=settings,
-        metric=PV_METRIC,
-        model=PV_MODEL,
-        horizon_hours=hours,
-    )
+    result = await get_forecast(metric=PV_METRIC, model=PV_MODEL, horizon_hours=hours)
     if result["row_count"] == 0:
         result["note"] = "PV forecast not available — check forecast-solar CronJob health"
     return result
 
 
-async def get_weather_forecast(
-    *,
-    settings: Settings,  # noqa: ARG001 — keep signature consistent with the other tools
-    hours: int = 48,
-) -> dict[str, Any]:
+async def get_weather_forecast(*, hours: int = 48) -> dict[str, Any]:
     """Hour-by-hour weather forecast for the next ``hours``, pivoted so each
     hour is one dict with the available metrics (``temperature``,
     ``cloud_cover``, ``precipitation``, ``solar_radiation``, ``wind_speed``).
@@ -107,34 +89,32 @@ async def get_weather_forecast(
     ``note`` flags it instead of returning a silent empty list.
     """
     hours = max(1, min(hours, _MAX_HORIZON_HOURS))
-    query = """
+    stmt = """
         SELECT forecast_for, metric, forecast_value
         FROM mcp_forecasts
         WHERE model = %s
           AND forecast_for BETWEEN now() AND now() + make_interval(hours => %s)
         ORDER BY forecast_for
     """
-    async with connection() as conn, conn.cursor() as cur:
-        await cur.execute(query, (WEATHER_MODEL, hours))
-        rows = await cur.fetchall()
+    result = await db.read(
+        "get_weather_forecast", "mcp_forecasts", stmt, (WEATHER_MODEL, hours), overflow="truncate"
+    )
 
     # Pivot per-metric rows into one dict per hour. Rows arrive ordered by
     # forecast_for, so insertion order keeps the hours chronological.
-    buckets: dict[datetime, dict[str, Any]] = {}
-    for row in rows:
-        bucket = buckets.setdefault(
-            row["forecast_for"],
-            {"forecast_for": row["forecast_for"].isoformat()},
-        )
+    buckets: dict[str, dict[str, Any]] = {}
+    for row in result.rows:
+        bucket = buckets.setdefault(row["forecast_for"], {"forecast_for": row["forecast_for"]})
         bucket[row["metric"]] = row["forecast_value"]
     hourly = list(buckets.values())
 
-    result: dict[str, Any] = {
+    out: dict[str, Any] = {
         "model": WEATHER_MODEL,
         "horizon_hours": hours,
         "row_count": len(hourly),
+        "truncated": result.truncated,
         "hours": hourly,
     }
     if not hourly:
-        result["note"] = "weather forecast not available — check forecast-weather CronJob health"
-    return result
+        out["note"] = "weather forecast not available — check forecast-weather CronJob health"
+    return out
