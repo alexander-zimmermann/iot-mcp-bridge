@@ -1,9 +1,10 @@
 """Shared psycopg connection pools (dict rows, autocommit), opened in the app lifespan.
 
 Two pools, not one: the read pool carries the SELECT-only role every query
-tool uses, the write pool carries the role that may record an episode
-verdict. Keeping them apart is what still makes the server read-only for
-everything but that one table.
+tool uses, the write pool carries a role whose whole privilege is the
+verdict table. Keeping them apart is what still makes the server read-only
+for everything but that one table — the separation is in the grants, not
+just in which function happens to call which pool.
 """
 
 from __future__ import annotations
