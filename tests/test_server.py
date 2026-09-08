@@ -31,6 +31,8 @@ EXPECTED_TOOLS = {
     "get_current_state",
     "subscribe_nats",
     "get_current_knx",
+    "list_episodes",
+    "set_episode_verdict",
 }
 
 

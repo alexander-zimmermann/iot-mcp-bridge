@@ -31,6 +31,7 @@ from . import nats as nats_module
 from .config import Settings, load_settings
 from .logging_setup import configure_logging, get_logger
 from .tools import domain as domain_tools
+from .tools import episodes as episode_tools
 from .tools import forecasts as forecasts_tools
 from .tools import live as live_tools
 from .tools import schema as schema_tools
@@ -404,6 +405,77 @@ async def get_weather_forecast(hours: int = 48) -> dict[str, Any]:
 
 
 @mcp.tool()
+async def list_episodes(
+    state: str = "all",
+    episode_id: int | None = None,
+    fault: str | None = None,
+    days: int = 7,
+    only_unjudged: bool = False,
+    limit: int = 100,
+) -> dict[str, Any]:
+    """Situations the detection chain recorded, newest first — the review list.
+
+    Repeated observations of one fault fold into one episode, and this is the
+    list the Basalte mails are the reminder to go through. Each row carries
+    the verdict it already has, so ``only_unjudged=True`` is "what still needs
+    judging".
+
+    * ``episode_id`` — read one episode back by id, whatever its age
+    * ``state`` — ``"all"`` | ``"open"`` (still running) | ``"ended"``
+    * ``fault`` — exact fault name (e.g. ``"silence"``, ``"constancy"``)
+    * ``days``  — window in days, by overlap: an episode that started weeks
+                  ago and is still open is included in a short window
+    * ``severity`` in the result is the delivery contract 1 (info) / 2
+      (warning) / 3 (critical); ``affected`` and ``room`` resolve the group
+      address in the subject against the KNX catalog.
+    """
+    log.info(
+        "tool_invoked",
+        tool="list_episodes",
+        state=state,
+        episode_id=episode_id,
+        fault=fault,
+        days=days,
+        only_unjudged=only_unjudged,
+    )
+    return await _instrumented(
+        "list_episodes",
+        episode_tools.list_episodes(
+            settings=_require_settings(),
+            state=state,  # type: ignore[arg-type]
+            episode_id=episode_id,
+            fault=fault,
+            days=days,
+            only_unjudged=only_unjudged,
+            limit=limit,
+        ),
+    )
+
+
+@mcp.tool()
+async def set_episode_verdict(episode_id: int, verdict: str) -> dict[str, Any]:
+    """Record whether one episode was ``"real"`` or ``"nonsense"``.
+
+    ``episode_id`` comes from ``list_episodes``. The verdict belongs to that
+    one situation, never to the fault as a whole — a verdict on the fault
+    would be a mute switch wearing a different hat. Setting it again
+    overwrites the earlier one.
+
+    Nothing acts on this automatically: verdicts are counted per fault on the
+    "Vorfälle" dashboard, and thresholds stay a human decision informed by
+    those counts. The returned row names the fault and subject, so the
+    verdict can be confirmed against the episode it was meant for.
+    """
+    log.info("tool_invoked", tool="set_episode_verdict", episode_id=episode_id, verdict=verdict)
+    return await _instrumented(
+        "set_episode_verdict",
+        episode_tools.set_episode_verdict(
+            settings=_require_settings(), episode_id=episode_id, verdict=verdict
+        ),
+    )
+
+
+@mcp.tool()
 async def get_current_state(
     domain: str,
     identifier: str | None = None,
@@ -544,6 +616,7 @@ def build_app() -> Starlette:
         metrics_module.init()
         auth_module.configure(_settings)
         await db.init_pool(_settings)
+        await db.init_write_pool(_settings)
         if _settings.nats_enabled:
             await nats_module.init(_settings)
         metrics_server, metrics_thread = metrics_module.serve(

@@ -32,6 +32,14 @@ class Settings(BaseSettings):
     db_pool_min: int = 2
     db_pool_max: int = 10
 
+    # The one write path: the verdict a person attaches to an episode. Left
+    # unset the server stays read-only and the verdict tool refuses; every
+    # other tool is unaffected.
+    db_write_username: str = ""
+    db_write_password: str = Field(default="", repr=False)
+    db_write_username_file: str | None = None
+    db_write_password_file: str | None = None
+
     # Query limits: cap on rows returned by the time-series tools.
     query_row_limit: int = 5000
 
@@ -69,6 +77,14 @@ class Settings(BaseSettings):
             raise ValueError("MCP_DB_USERNAME or MCP_DB_USERNAME_FILE is required")
         if not self.db_password:
             raise ValueError("MCP_DB_PASSWORD or MCP_DB_PASSWORD_FILE is required")
+        if self.db_write_username_file:
+            self.db_write_username = (
+                Path(self.db_write_username_file).read_text(encoding="utf-8").strip()
+            )
+        if self.db_write_password_file:
+            self.db_write_password = (
+                Path(self.db_write_password_file).read_text(encoding="utf-8").strip()
+            )
         return self
 
     @model_validator(mode="after")
@@ -91,13 +107,28 @@ class Settings(BaseSettings):
     def nats_servers_list(self) -> list[str]:
         return [s.strip() for s in self.nats_servers.split(",") if s.strip()]
 
-    @property
-    def db_dsn(self) -> str:
+    def _dsn(self, username: str, password: str) -> str:
         # URL-encode user + password — random-generated passwords routinely
         # contain `/`, `@`, `:`, `+` that break psycopg's URI parser.
-        user = quote(self.db_username, safe="")
-        password = quote(self.db_password, safe="")
-        return f"postgresql://{user}:{password}@{self.db_host}:{self.db_port}/{self.db_name}"
+        user = quote(username, safe="")
+        secret = quote(password, safe="")
+        return f"postgresql://{user}:{secret}@{self.db_host}:{self.db_port}/{self.db_name}"
+
+    @property
+    def db_dsn(self) -> str:
+        return self._dsn(self.db_username, self.db_password)
+
+    @property
+    def db_write_enabled(self) -> bool:
+        return bool(self.db_write_username and self.db_write_password)
+
+    @property
+    def db_write_dsn(self) -> str:
+        if not self.db_write_enabled:
+            raise ValueError(
+                "MCP_DB_WRITE_USERNAME / MCP_DB_WRITE_PASSWORD (or *_FILE variants) are required"
+            )
+        return self._dsn(self.db_write_username, self.db_write_password)
 
 
 def load_settings() -> Settings:

@@ -305,6 +305,55 @@ def _seed(conn: psycopg.Connection) -> None:
     )
     conn.execute("SELECT create_hypertable('mcp_forecasts', by_range('forecast_for'))")
 
+    # Episode tables — the detection chain's episode layer, mirroring the
+    # production bootstrap.sql. `episode_verdicts` keys on episode_id, so a
+    # second verdict on the same episode overwrites rather than duplicates.
+    conn.execute(
+        """
+        CREATE TABLE episodes (
+            id           BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+            fault        TEXT             NOT NULL,
+            subject      TEXT             NOT NULL,
+            started_at   TIMESTAMPTZ      NOT NULL,
+            last_seen_at TIMESTAMPTZ      NOT NULL,
+            ended_at     TIMESTAMPTZ,
+            severity     SMALLINT         NOT NULL CHECK (severity BETWEEN 1 AND 3),
+            peak_score   DOUBLE PRECISION NOT NULL,
+            folded       BOOLEAN          NOT NULL DEFAULT false,
+            externally_delivered BOOLEAN  NOT NULL DEFAULT false,
+            created_at   TIMESTAMPTZ      NOT NULL DEFAULT now()
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE episode_verdicts (
+            episode_id BIGINT      PRIMARY KEY REFERENCES episodes (id),
+            verdict    TEXT        NOT NULL CHECK (verdict IN ('real', 'nonsense')),
+            decided_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        )
+        """
+    )
+
+    # Episode seed — four episodes across two faults. `1/2/2` and `1/2/3`
+    # are catalog GAs so the subject resolves to a name and a room; the
+    # fourth subject deliberately carries no GA at all.
+    conn.execute(
+        """
+        INSERT INTO episodes (fault, subject, started_at, last_seen_at, ended_at,
+                              severity, peak_score, folded)
+        VALUES
+            ('silence',   'knx [1/2/2]', NOW() - INTERVAL '5 hours',
+             NOW() - INTERVAL '1 hour',  NULL,                       3, 9.5,  false),
+            ('silence',   'knx [1/2/3]', NOW() - INTERVAL '3 days',
+             NOW() - INTERVAL '3 days',  NOW() - INTERVAL '2 days',  1, 1.25, false),
+            ('constancy', 'knx [1/2/2]', NOW() - INTERVAL '9 days',
+             NOW() - INTERVAL '9 days',  NOW() - INTERVAL '8 days',  2, 4.0,  false),
+            ('constancy', 'ems boiler',  NOW() - INTERVAL '40 days',
+             NOW() - INTERVAL '39 days', NOW() - INTERVAL '39 days', 2, 3.5,  true)
+        """
+    )
+
 
 # LiteralString so the tuple elements stay assignable to psycopg's Query type.
 _CAGGS: list[tuple[LiteralString, LiteralString]] = [
@@ -374,6 +423,10 @@ def settings(timescaledb_container: PostgresContainer) -> Settings:
         MCP_DB_NAME="homelab",
         MCP_DB_USERNAME="test",
         MCP_DB_PASSWORD="test",
+        # The container has a single superuser role, so the write path shares
+        # it — in the cluster these are the separate rw credentials.
+        MCP_DB_WRITE_USERNAME="test",
+        MCP_DB_WRITE_PASSWORD="test",
         MCP_AUTH_ENABLED="false",
     )
     return Settings()  # type: ignore[call-arg]
@@ -382,6 +435,7 @@ def settings(timescaledb_container: PostgresContainer) -> Settings:
 @pytest_asyncio.fixture
 async def db_pool(settings: Settings) -> AsyncIterator[None]:
     await db.init_pool(settings)
+    await db.init_write_pool(settings)
     try:
         yield
     finally:
