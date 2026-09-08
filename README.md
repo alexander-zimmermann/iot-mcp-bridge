@@ -1,6 +1,6 @@
 # iot-mcp-bridge
 
-A read-only [Model Context Protocol](https://modelcontextprotocol.io) server that lets a large language model — Claude.ai, a local Ollama instance, or any other MCP-aware client — answer questions about an **IoT-enabled home**: heating, photovoltaics, EV charging, KNX bus events, room climate.
+A near read-only [Model Context Protocol](https://modelcontextprotocol.io) server that lets a large language model — Claude.ai, a local Ollama instance, or any other MCP-aware client — answer questions about an **IoT-enabled home**: heating, photovoltaics, EV charging, KNX bus events, room climate.
 
 Instead of giving the LLM raw SQL access (brittle, hard to bound, no audit), `iot-mcp-bridge` exposes a small set of well-shaped tools backed by **TimescaleDB hypertables** plus their **continuous aggregates**. The LLM picks a tool, the server runs a parametrised query against a long-term timeseries store, and the result comes back already aggregated and capped to a token-friendly size.
 
@@ -12,7 +12,7 @@ Modern homes generate a lot of telemetry — KNX writes, smart-meter readings, h
 
 - **Discoverable** — the LLM can list data sources and inspect schemas, including a sample of JSONB keys for raw payloads.
 - **Aggregation-aware** — when a query asks for hourly buckets or coarser, the server transparently routes to a TimescaleDB continuous aggregate, returning fewer rows and faster responses.
-- **Read-only by construction** — the server only ever connects with a Postgres role that has `SELECT` privileges. There is no `execute_sql` tool.
+- **Read-only by construction, with one exception** — the query tools connect with a Postgres role that has `SELECT` privileges only, and there is no `execute_sql` tool. The single write is `set_episode_verdict`, which goes through a separate pool whose role may touch one table. Leave the write credentials unset and the server is read-only outright.
 - **Result-bounded** — every tool caps its output. The LLM cannot accidentally pull a year of 5-second sensor data into its context window.
 - **Pluggable** — the data source is just Postgres + TimescaleDB. There is nothing homelab-specific in the server itself; the schema discovery works on any TimescaleDB instance.
 
@@ -46,6 +46,13 @@ behind high-level questions:
 | Tool                                            | What it does                                                                                       |
 | ----------------------------------------------- | -------------------------------------------------------------------------------------------------- |
 | `get_forecast(metric, horizon_hours, model)`    | Stored model forecasts (PV via Forecast.Solar, seasonal via statsforecast).                        |
+
+**Verdicts** (the review loop over the situations [iot-insights-engine](https://github.com/alexander-zimmermann/iot-insights-engine) recorded)
+
+| Tool                                              | What it does                                                                                                                                 |
+| ------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `list_episodes(state, fault, days, …)`            | The situations the detection chain folded from repeated observations, newest first, each with the verdict it carries. `only_unrated=True` is what still needs judging. |
+| `set_episode_verdict(episode_id, verdict)`        | Records `"real"` or `"nonsense"` on one episode; setting it again overwrites. Requires the write credentials below. Nothing acts on a verdict automatically — they are counted per fault on the dashboard, and thresholds stay a human decision. |
 
 **Live** (current state straight from NATS JetStream; requires `MCP_NATS_ENABLED=true`)
 
@@ -111,6 +118,10 @@ All settings are environment variables, prefixed with `MCP_`:
 | `MCP_DB_PASSWORD`                    | _required_                  | Password                                                       |
 | `MCP_DB_USERNAME_FILE`               | —                           | Read role from a mounted file (overrides `MCP_DB_USERNAME`)    |
 | `MCP_DB_PASSWORD_FILE`               | —                           | Read password from a mounted file (overrides `MCP_DB_PASSWORD`) |
+| `MCP_DB_WRITE_USERNAME`              | —                           | Verdict-write role; unset leaves the server read-only          |
+| `MCP_DB_WRITE_PASSWORD`              | —                           | Password for the verdict-write role                            |
+| `MCP_DB_WRITE_USERNAME_FILE`         | —                           | Read write role from a mounted file                            |
+| `MCP_DB_WRITE_PASSWORD_FILE`         | —                           | Read write password from a mounted file                        |
 | `MCP_DB_POOL_MIN`                    | `2`                         | psycopg pool min size                                          |
 | `MCP_DB_POOL_MAX`                    | `10`                        | psycopg pool max size                                          |
 | `MCP_QUERY_ROW_LIMIT`                | `5000`                      | Hard cap on rows returned by the query tools                   |
