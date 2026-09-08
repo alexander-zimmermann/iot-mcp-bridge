@@ -95,6 +95,7 @@ async def query_timeseries(
         source.name,
         stmt,
         params,
+        overflow="error",
         hint="widen the bucket or shorten the time range",
     )
 

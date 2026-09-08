@@ -28,6 +28,8 @@ _LITERAL_RE = re.compile(
 
 @dataclass(frozen=True)
 class Interval:
+    """A validated ``<count> <unit>`` width; ``unit`` is singular and lower-case."""
+
     count: int
     unit: str
 
@@ -41,6 +43,7 @@ class Interval:
 
     @property
     def seconds(self) -> int:
+        """Width in seconds, a month counting as 30 days."""
         return self.count * _UNIT_SECONDS[self.unit]
 
     @property
@@ -49,6 +52,7 @@ class Interval:
         return self.seconds >= 3600
 
     def __floordiv__(self, other: Interval) -> int:
+        """How many ``other`` fit into this width, floored; 0 when ``other`` is wider."""
         return self.seconds // other.seconds
 
     def __str__(self) -> str:

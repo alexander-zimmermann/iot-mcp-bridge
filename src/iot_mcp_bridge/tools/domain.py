@@ -11,8 +11,7 @@ from .. import db
 from ..interval import Interval
 from . import sources
 
-# Aggregation tools refuse an over-cap result (a sum over a partial result is
-# silently wrong); the event-log tools truncate and flag instead.
+# The hint an aggregation tool attaches when it refuses an over-cap result.
 _AGGREGATE_HINT = "widen the bucket or shorten the time range"
 
 # =====================================================================
@@ -69,6 +68,7 @@ async def query_energy_flow(
         "solaredge_powerflow_1h",
         _ENERGY_FLOW_SQL,
         (from_ts, to_ts, from_ts, to_ts),
+        overflow="error",
         hint=_AGGREGATE_HINT,
     )
     return {
@@ -144,6 +144,7 @@ async def query_heating_cycles(
         "ems_esp",
         _HEATING_CYCLES_SQL,
         (from_ts, to_ts, min_duration_seconds),
+        overflow="error",
         hint="shorten the time range or raise min_duration_seconds",
     )
     total_runtime = sum(float(r["duration_seconds"]) for r in result.rows)
@@ -222,7 +223,12 @@ async def query_room_climate(
         """
     ).format(where=sql.SQL(" AND ").join(where_parts))
     result = await db.read(
-        "query_room_climate", "ga_catalog_view", stmt, params, hint=_AGGREGATE_HINT
+        "query_room_climate",
+        "ga_catalog_view",
+        stmt,
+        params,
+        overflow="error",
+        hint=_AGGREGATE_HINT,
     )
     return {
         "room": room,

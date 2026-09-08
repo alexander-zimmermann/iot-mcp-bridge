@@ -305,7 +305,8 @@ async def get_forecast(
 
     Rows are produced by the ``forecast-solar`` (PV) and ``score-seasonal``
     (statsforecast) batch jobs. An empty list means no stored forecast
-    covers the requested metric/window.
+    covers the requested metric/window. Result row count is capped; exceed →
+    error suggesting a shorter horizon.
     """
     return await forecasts_tools.get_forecast(
         metric=metric,
@@ -320,7 +321,8 @@ async def get_pv_forecast(hours: int = 48) -> dict[str, Any]:
 
     Sourced from forecast.solar (already weather-adjusted) via the
     ``forecast-solar`` batch job — no live API call. A ``note`` field means
-    the job hasn't populated the requested window yet.
+    the job hasn't populated the requested window yet. Capped like
+    ``get_forecast``.
     """
     return await forecasts_tools.get_pv_forecast(hours=hours)
 
@@ -333,7 +335,7 @@ async def get_weather_forecast(hours: int = 48) -> dict[str, Any]:
 
     Sourced from Open-Meteo (DWD ICON) via the ``forecast-weather`` batch job
     — no live API call. A ``note`` field means the job hasn't populated the
-    requested window yet.
+    requested window yet. Capped like ``get_forecast``.
     """
     return await forecasts_tools.get_weather_forecast(hours=hours)
 

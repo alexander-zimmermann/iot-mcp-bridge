@@ -125,15 +125,15 @@ async def set_episode_verdict(*, episode_id: int, verdict: str) -> dict[str, Any
     if verdict not in VERDICTS:
         raise ValueError(f"invalid_verdict: {verdict!r}; must be one of {', '.join(VERDICTS)}")
 
-    named = await db.lookup(
+    found = await db.lookup(
         "set_episode_verdict",
         "episodes",
         "SELECT fault, subject FROM episodes WHERE id = %s",
         (episode_id,),
     )
-    if not named:
+    if not found:
         raise ValueError(f"unknown_episode: {episode_id}; call list_episodes to find a valid id")
-    episode = named[0]
+    episode = found[0]
 
     written = await db.write(
         "set_episode_verdict",

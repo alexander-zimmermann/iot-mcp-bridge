@@ -17,8 +17,7 @@ literal ``%`` is written ``%%``.
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Sequence
-from contextlib import asynccontextmanager
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Literal, LiteralString
@@ -142,16 +141,10 @@ def _require_write_pool() -> _Pool:
     return _write_pool
 
 
-@asynccontextmanager
-async def _connection(pool: _Pool) -> AsyncIterator[psycopg.AsyncConnection[DictRow]]:
-    async with pool.connection() as conn:
-        yield conn
-
-
 async def healthcheck() -> bool:
     """Round-trip ``SELECT 1``; False (never an exception) when the DB is unreachable."""
     try:
-        async with _connection(_require_pool()) as conn:
+        async with _require_pool().connection() as conn:
             await conn.execute("SELECT 1")
         return True
     except Exception as exc:
@@ -169,7 +162,7 @@ async def _execute(
     m = metrics_module.get()
     m.db_queries.labels(tool=tool, table_used=table_used).inc()
     with m.db_query_duration.labels(tool=tool).time():
-        async with _connection(pool) as conn:
+        async with pool.connection() as conn:
             rows = await (await conn.execute(stmt, params)).fetchall()
     return [_serialize(r) for r in rows]
 
@@ -180,17 +173,18 @@ async def read(
     stmt: Statement,
     params: Sequence[Any] = (),
     *,
+    overflow: Overflow,
     limit: int | None = None,
-    overflow: Overflow = "error",
     hint: str = "",
 ) -> Result:
     """Run ``stmt`` on the read pool, bounded to ``limit`` rows.
 
     ``stmt`` is a complete SELECT without a trailing LIMIT; the effective limit
     is ``limit`` capped at the configured row limit, or the row limit itself when
-    ``limit`` is None. On overflow, ``"error"`` raises ``row_limit_exceeded``
-    with ``hint`` appended and ``"truncate"`` returns the first ``limit`` rows
-    with ``truncated`` set. A non-positive ``limit`` is ``invalid_limit``.
+    ``limit`` is None. The caller names what an overflow means: ``"error"``
+    raises ``row_limit_exceeded`` with ``hint`` appended, ``"truncate"`` returns
+    the first ``limit`` rows with ``truncated`` set. A non-positive ``limit`` is
+    ``invalid_limit``.
     """
     pool = _require_pool()
     if limit is not None and limit <= 0:

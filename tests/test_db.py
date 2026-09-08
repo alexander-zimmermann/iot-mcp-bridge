@@ -44,7 +44,7 @@ async def test_read_errors_on_overflow_with_the_hint(settings: Settings) -> None
     await db.init_pool(settings.model_copy(update={"query_row_limit": 5}))
     try:
         with pytest.raises(ValueError, match="row_limit_exceeded.*exceed 5 rows; shorten it"):
-            await db.read("t", "knx", _KNX_NEWEST_FIRST, hint="shorten it")
+            await db.read("t", "knx", _KNX_NEWEST_FIRST, overflow="error", hint="shorten it")
     finally:
         await db.close_pool()
 
@@ -77,7 +77,7 @@ async def test_read_rejects_a_non_positive_limit(db_pool: None, limit: int) -> N
 
 async def test_read_before_init_is_a_runtime_error() -> None:
     with pytest.raises(RuntimeError, match="init_pool"):
-        await db.read("t", "knx", _KNX_NEWEST_FIRST)
+        await db.read("t", "knx", _KNX_NEWEST_FIRST, overflow="error")
 
 
 async def test_write_returns_the_serialized_returning_rows(

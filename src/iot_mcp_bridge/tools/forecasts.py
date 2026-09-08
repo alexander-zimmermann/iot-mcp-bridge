@@ -23,6 +23,8 @@ PV_MODEL = "forecast_solar"
 # forecast-weather CronJob writes one row per (hour, metric) under this model.
 WEATHER_MODEL = "open_meteo"
 _MAX_HORIZON_HOURS = 24 * 14
+# A truncated forecast would pivot a partial last hour, so an overflow refuses.
+_HORIZON_HINT = "shorten the horizon"
 
 
 async def get_forecast(
@@ -54,13 +56,14 @@ async def get_forecast(
         ORDER BY forecast_for, model
         """
     ).format(where=sql.SQL(" AND ").join(where))
-    result = await db.read("get_forecast", "mcp_forecasts", stmt, params, overflow="truncate")
+    result = await db.read(
+        "get_forecast", "mcp_forecasts", stmt, params, overflow="error", hint=_HORIZON_HINT
+    )
 
     return {
         "metric": metric,
         "horizon_hours": horizon_hours,
         "row_count": len(result.rows),
-        "truncated": result.truncated,
         "rows": result.rows,
     }
 
@@ -97,7 +100,12 @@ async def get_weather_forecast(*, hours: int = 48) -> dict[str, Any]:
         ORDER BY forecast_for
     """
     result = await db.read(
-        "get_weather_forecast", "mcp_forecasts", stmt, (WEATHER_MODEL, hours), overflow="truncate"
+        "get_weather_forecast",
+        "mcp_forecasts",
+        stmt,
+        (WEATHER_MODEL, hours),
+        overflow="error",
+        hint=_HORIZON_HINT,
     )
 
     # Pivot per-metric rows into one dict per hour. Rows arrive ordered by
@@ -112,7 +120,6 @@ async def get_weather_forecast(*, hours: int = 48) -> dict[str, Any]:
         "model": WEATHER_MODEL,
         "horizon_hours": hours,
         "row_count": len(hourly),
-        "truncated": result.truncated,
         "hours": hourly,
     }
     if not hourly:
