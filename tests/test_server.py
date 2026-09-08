@@ -8,6 +8,8 @@ instrumentation run for real.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from fastmcp import Client
 from fastmcp.exceptions import ToolError
@@ -35,6 +37,9 @@ EXPECTED_TOOLS = {
     "get_current_knx",
     "list_episodes",
     "set_episode_verdict",
+    "search_wiki",
+    "get_wiki_page",
+    "list_wiki_pages",
 }
 
 
@@ -67,6 +72,23 @@ def test_health_and_discovery_endpoints(app_env: None) -> None:
         meta = client.get("/.well-known/oauth-protected-resource")
         assert meta.status_code == 200
         assert "authorization_servers" in meta.json()
+
+
+def test_healthz_has_no_wiki_dependency(
+    app_env: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Wiki configured: readiness stays DB-gated and never reports or contacts the wiki."""
+    token_file = tmp_path / "wikijs-token"
+    token_file.write_text("not-a-real-key\n", encoding="utf-8")
+    monkeypatch.setenv("MCP_WIKIJS_URL", "http://127.0.0.1:9")  # never contacted
+    monkeypatch.setenv("MCP_WIKIJS_TOKEN_FILE", str(token_file))
+
+    app = server.build_app()
+    with TestClient(app) as client:
+        healthz = client.get("/healthz")
+        assert healthz.status_code == 200
+        assert healthz.json()["status"] == "ok"
+        assert "wiki" not in healthz.json()
 
 
 async def test_all_tools_registered() -> None:
