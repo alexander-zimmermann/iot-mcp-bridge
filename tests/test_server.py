@@ -10,9 +10,11 @@ from __future__ import annotations
 
 import pytest
 from fastmcp import Client
+from fastmcp.exceptions import ToolError
 from starlette.testclient import TestClient
 from testcontainers.postgres import PostgresContainer
 
+from iot_mcp_bridge import metrics as metrics_module
 from iot_mcp_bridge import server
 
 EXPECTED_TOOLS = {
@@ -79,3 +81,33 @@ async def test_tool_call_roundtrip(db_pool: None) -> None:
         result = await client.call_tool("list_data_sources", {})
     names = {entry["name"] for entry in result.data}
     assert {"knx", "ems_esp"} <= names
+
+
+async def test_literal_parameters_reach_the_client_as_enums() -> None:
+    """The LLM sees the allowed values instead of guessing at a free string."""
+    async with Client(server.mcp) as client:
+        by_name = {t.name: t for t in await client.list_tools()}
+    aggregation = by_name["query_timeseries"].input_schema["properties"]["aggregation"]
+    assert aggregation["enum"] == ["avg", "sum", "min", "max", "count"]
+    state = by_name["list_episodes"].input_schema["properties"]["state"]
+    assert state["enum"] == ["all", "open", "ended"]
+
+
+async def test_middleware_counts_every_tool_outcome(db_pool: None) -> None:
+    """One middleware, not one wrapper per tool, records ok and error per tool and subject."""
+    metrics_module.reset()
+    async with Client(server.mcp) as client:
+        await client.call_tool("list_data_sources", {})
+        with pytest.raises(ToolError, match="unknown_table"):
+            await client.call_tool("get_schema", {"table": "does_not_exist"})
+
+    def count(tool: str, outcome: str) -> float | None:
+        return metrics_module.get().registry.get_sample_value(
+            "iot_mcp_bridge_tool_calls_total",
+            {"tool": tool, "sub": "anonymous", "outcome": outcome},
+        )
+
+    assert count("list_data_sources", "ok") == 1
+    assert count("list_data_sources", "error") is None
+    assert count("get_schema", "error") == 1
+    assert count("get_schema", "ok") is None
