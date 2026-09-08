@@ -17,7 +17,7 @@ the server's only write, and it goes through the separate write pool.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Literal
+from typing import Any, Literal, get_args
 
 from psycopg import sql
 
@@ -36,7 +36,7 @@ _MAX_WINDOW_DAYS = 365 * 5
 # The subject carries the group address it was observed on; the catalog turns
 # that into the name and room a person recognises. Falls back to the bracketed
 # label, then to the subject itself, for subjects that carry no address.
-_SUBJECT_SQL = sql.SQL(
+_CATALOG_JOIN = sql.SQL(
     """
     LEFT JOIN ga_catalog c ON c.ga = substring(e.subject from '[0-9]+/[0-9]+/[0-9]+')
     """
@@ -51,28 +51,42 @@ async def list_episodes(
     *,
     settings: Settings,
     state: EpisodeState = "all",
+    episode_id: int | None = None,
     fault: str | None = None,
     days: int = 7,
-    only_unrated: bool = False,
+    only_unjudged: bool = False,
     limit: int = 100,
 ) -> dict[str, Any]:
     """Episodes overlapping the last ``days``, newest first, each with the
     verdict it already carries.
 
     The window is an overlap, not a start filter: an episode that began
-    weeks ago and is still open is exactly what a review needs to see.
+    weeks ago and is still open is exactly what a review needs to see. Pass
+    ``episode_id`` to read one episode back regardless of how old it is.
     """
     if limit <= 0:
         raise ValueError(f"invalid_limit: {limit}")
-    if state not in ("all", "open", "ended"):
-        raise ValueError(f"invalid_state: {state!r}; must be one of all, open, ended")
-    days = max(1, min(days, _MAX_WINDOW_DAYS))
+    if state not in get_args(EpisodeState):
+        raise ValueError(
+            f"invalid_state: {state!r}; must be one of {', '.join(get_args(EpisodeState))}"
+        )
+    if days <= 0:
+        raise ValueError(f"invalid_days: {days}")
+    days = min(days, _MAX_WINDOW_DAYS)
     effective_limit = min(limit, settings.query_row_limit)
 
-    where_parts: list[sql.Composable] = [
-        sql.SQL("COALESCE(e.ended_at, now()) >= now() - make_interval(days => %s)")
-    ]
-    params: list[Any] = [days]
+    # A named episode is answered whatever its age — the window is for
+    # browsing, not for hiding a verdict somebody just wrote.
+    where_parts: list[sql.Composable] = []
+    params: list[Any] = []
+    if episode_id is not None:
+        where_parts.append(sql.SQL("e.id = %s"))
+        params.append(episode_id)
+    else:
+        where_parts.append(
+            sql.SQL("COALESCE(e.ended_at, now()) >= now() - make_interval(days => %s)")
+        )
+        params.append(days)
     if state == "open":
         where_parts.append(sql.SQL("e.ended_at IS NULL"))
     elif state == "ended":
@@ -80,7 +94,7 @@ async def list_episodes(
     if fault is not None:
         where_parts.append(sql.SQL("e.fault = %s"))
         params.append(fault)
-    if only_unrated:
+    if only_unjudged:
         where_parts.append(sql.SQL("v.verdict IS NULL"))
     params.append(effective_limit + 1)
 
@@ -99,7 +113,7 @@ async def list_episodes(
         ORDER BY e.started_at DESC
         LIMIT %s
         """
-    ).format(catalog=_SUBJECT_SQL, where=sql.SQL(" AND ").join(where_parts))
+    ).format(catalog=_CATALOG_JOIN, where=sql.SQL(" AND ").join(where_parts))
 
     m = metrics_module.get()
     m.db_queries.labels(tool="list_episodes", table_used="episodes").inc()
@@ -111,8 +125,8 @@ async def list_episodes(
     rows = rows[:effective_limit]
     return {
         "state": state,
-        "days": days,
-        "filters": {"fault": fault, "only_unrated": only_unrated},
+        "days": None if episode_id is not None else days,
+        "filters": {"episode_id": episode_id, "fault": fault, "only_unjudged": only_unjudged},
         "limit": effective_limit,
         "row_count": len(rows),
         "truncated": truncated,

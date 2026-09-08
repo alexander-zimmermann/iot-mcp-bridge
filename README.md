@@ -12,7 +12,7 @@ Modern homes generate a lot of telemetry — KNX writes, smart-meter readings, h
 
 - **Discoverable** — the LLM can list data sources and inspect schemas, including a sample of JSONB keys for raw payloads.
 - **Aggregation-aware** — when a query asks for hourly buckets or coarser, the server transparently routes to a TimescaleDB continuous aggregate, returning fewer rows and faster responses.
-- **Read-only by construction, with one exception** — the query tools connect with a Postgres role that has `SELECT` privileges only, and there is no `execute_sql` tool. The single write is `set_episode_verdict`, which goes through a separate pool whose role may touch one table. Leave the write credentials unset and the server is read-only outright.
+- **Read-only by construction, with one exception** — the query tools connect with a Postgres role that has `SELECT` privileges only, and there is no `execute_sql` tool. The single write is `set_episode_verdict`, which goes through a separate pool and a separate role, and is the only tool that writes at all. Leave the write credentials unset and the server is read-only outright.
 - **Result-bounded** — every tool caps its output. The LLM cannot accidentally pull a year of 5-second sensor data into its context window.
 - **Pluggable** — the data source is just Postgres + TimescaleDB. There is nothing homelab-specific in the server itself; the schema discovery works on any TimescaleDB instance.
 
@@ -51,7 +51,7 @@ behind high-level questions:
 
 | Tool                                              | What it does                                                                                                                                 |
 | ------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| `list_episodes(state, fault, days, …)`            | The situations the detection chain folded from repeated observations, newest first, each with the verdict it carries. `only_unrated=True` is what still needs judging. |
+| `list_episodes(state, fault, days, …)`            | The situations the detection chain folded from repeated observations, newest first, each with the verdict it carries. `only_unjudged=True` is what still needs judging. |
 | `set_episode_verdict(episode_id, verdict)`        | Records `"real"` or `"nonsense"` on one episode; setting it again overwrites. Requires the write credentials below. Nothing acts on a verdict automatically — they are counted per fault on the dashboard, and thresholds stay a human decision. |
 
 **Live** (current state straight from NATS JetStream; requires `MCP_NATS_ENABLED=true`)

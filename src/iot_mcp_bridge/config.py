@@ -107,13 +107,16 @@ class Settings(BaseSettings):
     def nats_servers_list(self) -> list[str]:
         return [s.strip() for s in self.nats_servers.split(",") if s.strip()]
 
-    @property
-    def db_dsn(self) -> str:
+    def _dsn(self, username: str, password: str) -> str:
         # URL-encode user + password — random-generated passwords routinely
         # contain `/`, `@`, `:`, `+` that break psycopg's URI parser.
-        user = quote(self.db_username, safe="")
-        password = quote(self.db_password, safe="")
-        return f"postgresql://{user}:{password}@{self.db_host}:{self.db_port}/{self.db_name}"
+        user = quote(username, safe="")
+        secret = quote(password, safe="")
+        return f"postgresql://{user}:{secret}@{self.db_host}:{self.db_port}/{self.db_name}"
+
+    @property
+    def db_dsn(self) -> str:
+        return self._dsn(self.db_username, self.db_password)
 
     @property
     def db_write_enabled(self) -> bool:
@@ -125,9 +128,7 @@ class Settings(BaseSettings):
             raise ValueError(
                 "MCP_DB_WRITE_USERNAME / MCP_DB_WRITE_PASSWORD (or *_FILE variants) are required"
             )
-        user = quote(self.db_write_username, safe="")
-        password = quote(self.db_write_password, safe="")
-        return f"postgresql://{user}:{password}@{self.db_host}:{self.db_port}/{self.db_name}"
+        return self._dsn(self.db_write_username, self.db_write_password)
 
 
 def load_settings() -> Settings:

@@ -407,18 +407,20 @@ async def get_weather_forecast(hours: int = 48) -> dict[str, Any]:
 @mcp.tool()
 async def list_episodes(
     state: str = "all",
+    episode_id: int | None = None,
     fault: str | None = None,
     days: int = 7,
-    only_unrated: bool = False,
+    only_unjudged: bool = False,
     limit: int = 100,
 ) -> dict[str, Any]:
     """Situations the detection chain recorded, newest first — the review list.
 
     Repeated observations of one fault fold into one episode, and this is the
     list the Basalte mails are the reminder to go through. Each row carries
-    the verdict it already has, so ``only_unrated=True`` is "what still needs
+    the verdict it already has, so ``only_unjudged=True`` is "what still needs
     judging".
 
+    * ``episode_id`` — read one episode back by id, whatever its age
     * ``state`` — ``"all"`` | ``"open"`` (still running) | ``"ended"``
     * ``fault`` — exact fault name (e.g. ``"silence"``, ``"constancy"``)
     * ``days``  — window in days, by overlap: an episode that started weeks
@@ -431,18 +433,20 @@ async def list_episodes(
         "tool_invoked",
         tool="list_episodes",
         state=state,
+        episode_id=episode_id,
         fault=fault,
         days=days,
-        only_unrated=only_unrated,
+        only_unjudged=only_unjudged,
     )
     return await _instrumented(
         "list_episodes",
         episode_tools.list_episodes(
             settings=_require_settings(),
             state=state,  # type: ignore[arg-type]
+            episode_id=episode_id,
             fault=fault,
             days=days,
-            only_unrated=only_unrated,
+            only_unjudged=only_unjudged,
             limit=limit,
         ),
     )

@@ -305,7 +305,7 @@ def _seed(conn: psycopg.Connection) -> None:
     )
     conn.execute("SELECT create_hypertable('mcp_forecasts', by_range('forecast_for'))")
 
-    # Episode tables — the detection chain's incident layer, mirroring the
+    # Episode tables — the detection chain's episode layer, mirroring the
     # production bootstrap.sql. `episode_verdicts` keys on episode_id, so a
     # second verdict on the same episode overwrites rather than duplicates.
     conn.execute(
@@ -335,7 +335,7 @@ def _seed(conn: psycopg.Connection) -> None:
         """
     )
 
-    # Episode seed — four incidents across two faults. `1/2/2` and `1/2/3`
+    # Episode seed — four episodes across two faults. `1/2/2` and `1/2/3`
     # are catalog GAs so the subject resolves to a name and a room; the
     # fourth subject deliberately carries no GA at all.
     conn.execute(

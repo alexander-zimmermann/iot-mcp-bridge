@@ -105,15 +105,38 @@ async def test_second_verdict_overwrites_and_never_duplicates(
     assert row[0] == 1
 
 
-async def test_list_episodes_can_narrow_to_the_unrated_ones(
+async def test_list_episodes_can_narrow_to_the_unjudged_ones(
     settings: Settings, clean_verdicts: None
 ) -> None:
     episode_id = await _episode_id(settings, "silence", open_only=True)
     await episodes.set_episode_verdict(settings=settings, episode_id=episode_id, verdict="real")
 
-    unrated = await episodes.list_episodes(settings=settings, days=365, only_unrated=True)
-    assert episode_id not in [r["episode_id"] for r in unrated["episodes"]]
-    assert all(r["verdict"] is None for r in unrated["episodes"])
+    unjudged = await episodes.list_episodes(settings=settings, days=365, only_unjudged=True)
+    assert episode_id not in [r["episode_id"] for r in unjudged["episodes"]]
+    assert all(r["verdict"] is None for r in unjudged["episodes"])
+
+
+async def test_one_episode_reads_back_outside_the_default_window(
+    settings: Settings, clean_verdicts: None
+) -> None:
+    """A verdict must be readable without guessing how wide the window has to
+    be — the oldest seeded episode is 40 days back, far outside the default."""
+    oldest = await _episode_id(settings, "constancy")
+    await episodes.set_episode_verdict(settings=settings, episode_id=oldest, verdict="real")
+
+    named = await episodes.list_episodes(settings=settings, episode_id=oldest)
+    assert named["row_count"] == 1
+    assert named["episodes"][0]["verdict"] == "real"
+    assert named["days"] is None
+
+
+async def test_invalid_window_and_state_are_refused(
+    settings: Settings, clean_verdicts: None
+) -> None:
+    with pytest.raises(ValueError, match="invalid_days"):
+        await episodes.list_episodes(settings=settings, days=0)
+    with pytest.raises(ValueError, match="open, ended"):
+        await episodes.list_episodes(settings=settings, state="offen")  # type: ignore[arg-type]
 
 
 async def test_unknown_verdict_names_the_valid_ones(
