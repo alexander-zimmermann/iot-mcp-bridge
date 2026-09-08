@@ -6,20 +6,27 @@ must stay accurate and self-contained. The docstrings on the implementations
 in ``tools/*`` document internals for developers and must not be relied on
 by clients.
 
+Each tool here is its LLM-facing docstring plus the call into ``tools/*``;
+logging and the per-tool outcome metric are one middleware, not one wrapper
+per tool.
+
 The app is exposed via :func:`build_app` (uvicorn factory) so importing this
 module has no side effects — settings are only loaded when the app is built.
 """
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Awaitable
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
 
 import structlog
 from fastmcp import FastMCP
+from fastmcp.server.middleware import CallNext, Middleware, MiddlewareContext
+from fastmcp.tools.base import ToolResult
+from mcp.types import CallToolRequestParams
 from starlette.applications import Starlette
-from starlette.middleware import Middleware
+from starlette.middleware import Middleware as StarletteMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Mount, Route
@@ -34,11 +41,12 @@ from .tools import domain as domain_tools
 from .tools import episodes as episode_tools
 from .tools import forecasts as forecasts_tools
 from .tools import live as live_tools
-from .tools import schema as schema_tools
+from .tools import sources as sources_tools
 from .tools import timeseries as timeseries_tools
+from .tools.episodes import EpisodeState
+from .tools.timeseries import Aggregation
 
 log = get_logger(__name__)
-mcp: FastMCP = FastMCP("iot-mcp-bridge")
 
 
 def _principal_sub() -> str:
@@ -51,15 +59,26 @@ def _record_tool_call(tool: str, outcome: str) -> None:
     metrics_module.get().tool_calls.labels(tool=tool, sub=_principal_sub(), outcome=outcome).inc()
 
 
-async def _instrumented[T](tool: str, call: Awaitable[T]) -> T:
-    """Await ``call``, recording the per-tool ok/error metric."""
-    try:
-        result = await call
-    except Exception:
-        _record_tool_call(tool, "error")
-        raise
-    _record_tool_call(tool, "ok")
-    return result
+class ToolTelemetry(Middleware):
+    """Log every tool call and count its outcome per tool and OIDC subject."""
+
+    async def on_call_tool(
+        self,
+        context: MiddlewareContext[CallToolRequestParams],
+        call_next: CallNext[CallToolRequestParams, ToolResult],
+    ) -> ToolResult:
+        tool = context.message.name
+        log.info("tool_invoked", tool=tool, arguments=context.message.arguments)
+        try:
+            result = await call_next(context)
+        except Exception:
+            _record_tool_call(tool, "error")
+            raise
+        _record_tool_call(tool, "ok")
+        return result
+
+
+mcp: FastMCP = FastMCP("iot-mcp-bridge", middleware=[ToolTelemetry()])
 
 
 @mcp.tool()
@@ -69,8 +88,7 @@ async def list_data_sources() -> list[dict[str, Any]]:
     Use this first to discover what data is available before calling
     ``get_schema`` or ``query_timeseries``.
     """
-    log.info("tool_invoked", tool="list_data_sources")
-    return await _instrumented("list_data_sources", schema_tools.list_data_sources())
+    return await sources_tools.list_data_sources()
 
 
 @mcp.tool()
@@ -81,8 +99,7 @@ async def get_schema(table: str) -> dict[str, Any]:
     observed in the latest 1000 rows so the LLM can construct
     ``raw->>'<key>'`` expressions.
     """
-    log.info("tool_invoked", tool="get_schema", table=table)
-    return await _instrumented("get_schema", schema_tools.get_schema(table))
+    return await sources_tools.get_schema(table)
 
 
 @mcp.tool()
@@ -91,7 +108,7 @@ async def query_timeseries(
     columns: list[str],
     from_ts: str,
     to_ts: str,
-    aggregation: str = "avg",
+    aggregation: Aggregation = "avg",
     bucket: str = "1 hour",
     filters: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -105,25 +122,14 @@ async def query_timeseries(
     - Result row count is capped (default 5000); exceed → error suggesting a
       coarser bucket.
     """
-    log.info(
-        "tool_invoked",
-        tool="query_timeseries",
+    return await timeseries_tools.query_timeseries(
         table=table,
-        bucket=bucket,
+        columns=columns,
+        from_ts=from_ts,
+        to_ts=to_ts,
         aggregation=aggregation,
-    )
-    return await _instrumented(
-        "query_timeseries",
-        timeseries_tools.query_timeseries(
-            table=table,
-            columns=columns,
-            from_ts=from_ts,
-            to_ts=to_ts,
-            settings=_require_settings(),
-            aggregation=aggregation,  # type: ignore[arg-type]
-            bucket=bucket,
-            filters=filters,
-        ),
+        bucket=bucket,
+        filters=filters,
     )
 
 
@@ -138,13 +144,7 @@ async def query_energy_flow(
     Pulls from the hourly continuous aggregates ``solaredge_powerflow_1h`` and
     ``warp_meter_1h``. Bucket must be ``1 hour`` or coarser.
     """
-    log.info("tool_invoked", tool="query_energy_flow", bucket=bucket)
-    return await _instrumented(
-        "query_energy_flow",
-        domain_tools.query_energy_flow(
-            from_ts=from_ts, to_ts=to_ts, settings=_require_settings(), bucket=bucket
-        ),
-    )
+    return await domain_tools.query_energy_flow(from_ts=from_ts, to_ts=to_ts, bucket=bucket)
 
 
 @mcp.tool()
@@ -159,15 +159,10 @@ async def query_heating_cycles(
     rows (``topic = 'boiler_data'``). Returns one row per cycle with start,
     end, duration, peak and average burner power.
     """
-    log.info("tool_invoked", tool="query_heating_cycles")
-    return await _instrumented(
-        "query_heating_cycles",
-        domain_tools.query_heating_cycles(
-            from_ts=from_ts,
-            to_ts=to_ts,
-            settings=_require_settings(),
-            min_duration_seconds=min_duration_seconds,
-        ),
+    return await domain_tools.query_heating_cycles(
+        from_ts=from_ts,
+        to_ts=to_ts,
+        min_duration_seconds=min_duration_seconds,
     )
 
 
@@ -186,17 +181,12 @@ async def query_room_climate(
     Optional ``functions`` narrows the result to GAs whose ETS function name
     is in the given list.
     """
-    log.info("tool_invoked", tool="query_room_climate", room=room, bucket=bucket)
-    return await _instrumented(
-        "query_room_climate",
-        domain_tools.query_room_climate(
-            room=room,
-            from_ts=from_ts,
-            to_ts=to_ts,
-            settings=_require_settings(),
-            bucket=bucket,
-            functions=functions,
-        ),
+    return await domain_tools.query_room_climate(
+        room=room,
+        from_ts=from_ts,
+        to_ts=to_ts,
+        bucket=bucket,
+        functions=functions,
     )
 
 
@@ -228,27 +218,14 @@ async def query_knx_events(
     ``truncated: true`` — narrow the filters or shorten the window for
     the rest.
     """
-    log.info(
-        "tool_invoked",
-        tool="query_knx_events",
+    return await domain_tools.query_knx_events(
+        from_ts=from_ts,
+        to_ts=to_ts,
         room=room,
         ga=ga,
         name=name,
         functions=functions,
         limit=limit,
-    )
-    return await _instrumented(
-        "query_knx_events",
-        domain_tools.query_knx_events(
-            from_ts=from_ts,
-            to_ts=to_ts,
-            settings=_require_settings(),
-            room=room,
-            ga=ga,
-            name=name,
-            functions=functions,
-            limit=limit,
-        ),
     )
 
 
@@ -282,29 +259,15 @@ async def query_unifi_events(
     ``truncated: true`` — narrow the filters or shorten the window for
     the rest.
     """
-    log.info(
-        "tool_invoked",
-        tool="query_unifi_events",
+    return await domain_tools.query_unifi_events(
+        from_ts=from_ts,
+        to_ts=to_ts,
         camera=camera,
         detection_type=detection_type,
         event_type=event_type,
         min_score=min_score,
         event_id=event_id,
         limit=limit,
-    )
-    return await _instrumented(
-        "query_unifi_events",
-        domain_tools.query_unifi_events(
-            from_ts=from_ts,
-            to_ts=to_ts,
-            settings=_require_settings(),
-            camera=camera,
-            detection_type=detection_type,
-            event_type=event_type,
-            min_score=min_score,
-            event_id=event_id,
-            limit=limit,
-        ),
     )
 
 
@@ -322,23 +285,13 @@ async def correlate_events(
     Each ``source`` is ``{"table": str, "column": str}``. Returns ``best`` and
     ``top`` (up to 10) lags by ``|corr|``.
     """
-    log.info(
-        "tool_invoked",
-        tool="correlate_events",
-        bucket=bucket,
+    return await domain_tools.correlate_events(
+        source_a=source_a,
+        source_b=source_b,
+        from_ts=from_ts,
+        to_ts=to_ts,
         window=window,
-    )
-    return await _instrumented(
-        "correlate_events",
-        domain_tools.correlate_events(
-            source_a=source_a,
-            source_b=source_b,
-            from_ts=from_ts,
-            to_ts=to_ts,
-            settings=_require_settings(),
-            window=window,
-            bucket=bucket,
-        ),
+        bucket=bucket,
     )
 
 
@@ -352,23 +305,13 @@ async def get_forecast(
 
     Rows are produced by the ``forecast-solar`` (PV) and ``score-seasonal``
     (statsforecast) batch jobs. An empty list means no stored forecast
-    covers the requested metric/window.
+    covers the requested metric/window. Result row count is capped; exceed →
+    error suggesting a shorter horizon.
     """
-    log.info(
-        "tool_invoked",
-        tool="get_forecast",
+    return await forecasts_tools.get_forecast(
         metric=metric,
         horizon_hours=horizon_hours,
         model=model,
-    )
-    return await _instrumented(
-        "get_forecast",
-        forecasts_tools.get_forecast(
-            settings=_require_settings(),
-            metric=metric,
-            horizon_hours=horizon_hours,
-            model=model,
-        ),
     )
 
 
@@ -378,13 +321,10 @@ async def get_pv_forecast(hours: int = 48) -> dict[str, Any]:
 
     Sourced from forecast.solar (already weather-adjusted) via the
     ``forecast-solar`` batch job — no live API call. A ``note`` field means
-    the job hasn't populated the requested window yet.
+    the job hasn't populated the requested window yet. Capped like
+    ``get_forecast``.
     """
-    log.info("tool_invoked", tool="get_pv_forecast", hours=hours)
-    return await _instrumented(
-        "get_pv_forecast",
-        forecasts_tools.get_pv_forecast(settings=_require_settings(), hours=hours),
-    )
+    return await forecasts_tools.get_pv_forecast(hours=hours)
 
 
 @mcp.tool()
@@ -395,18 +335,14 @@ async def get_weather_forecast(hours: int = 48) -> dict[str, Any]:
 
     Sourced from Open-Meteo (DWD ICON) via the ``forecast-weather`` batch job
     — no live API call. A ``note`` field means the job hasn't populated the
-    requested window yet.
+    requested window yet. Capped like ``get_forecast``.
     """
-    log.info("tool_invoked", tool="get_weather_forecast", hours=hours)
-    return await _instrumented(
-        "get_weather_forecast",
-        forecasts_tools.get_weather_forecast(settings=_require_settings(), hours=hours),
-    )
+    return await forecasts_tools.get_weather_forecast(hours=hours)
 
 
 @mcp.tool()
 async def list_episodes(
-    state: str = "all",
+    state: EpisodeState = "all",
     episode_id: int | None = None,
     fault: str | None = None,
     days: int = 7,
@@ -429,26 +365,13 @@ async def list_episodes(
       (warning) / 3 (critical); ``affected`` and ``room`` resolve the group
       address in the subject against the KNX catalog.
     """
-    log.info(
-        "tool_invoked",
-        tool="list_episodes",
+    return await episode_tools.list_episodes(
         state=state,
         episode_id=episode_id,
         fault=fault,
         days=days,
         only_unjudged=only_unjudged,
-    )
-    return await _instrumented(
-        "list_episodes",
-        episode_tools.list_episodes(
-            settings=_require_settings(),
-            state=state,  # type: ignore[arg-type]
-            episode_id=episode_id,
-            fault=fault,
-            days=days,
-            only_unjudged=only_unjudged,
-            limit=limit,
-        ),
+        limit=limit,
     )
 
 
@@ -466,13 +389,7 @@ async def set_episode_verdict(episode_id: int, verdict: str) -> dict[str, Any]:
     those counts. The returned row names the fault and subject, so the
     verdict can be confirmed against the episode it was meant for.
     """
-    log.info("tool_invoked", tool="set_episode_verdict", episode_id=episode_id, verdict=verdict)
-    return await _instrumented(
-        "set_episode_verdict",
-        episode_tools.set_episode_verdict(
-            settings=_require_settings(), episode_id=episode_id, verdict=verdict
-        ),
-    )
+    return await episode_tools.set_episode_verdict(episode_id=episode_id, verdict=verdict)
 
 
 @mcp.tool()
@@ -493,12 +410,10 @@ async def get_current_state(
     value is still current. If the subject was never seen → ``status: "unknown"``
     with ``last_known_in_tsdb`` from TimescaleDB.
     """
-    log.info("tool_invoked", tool="get_current_state", domain=domain, identifier=identifier)
-    return await _instrumented(
-        "get_current_state",
-        live_tools.get_current_state(
-            domain=domain, settings=_require_settings(), identifier=identifier
-        ),
+    return await live_tools.get_current_state(
+        domain,
+        identifier,
+        stale_after_seconds=_require_settings().live_stale_seconds,
     )
 
 
@@ -515,14 +430,10 @@ async def subscribe_nats(
     concrete tokens before any wildcard, so ``knx.>`` is rejected but
     ``knx.1.2.3`` / ``knx.1.>`` are accepted. ``duration_seconds`` is capped at 30.
     """
-    log.info(
-        "tool_invoked", tool="subscribe_nats", subject=subject, duration_seconds=duration_seconds
-    )
-    return await _instrumented(
-        "subscribe_nats",
-        live_tools.subscribe_nats(
-            subject=subject, settings=_require_settings(), duration_seconds=duration_seconds
-        ),
+    return await live_tools.subscribe_nats(
+        subject,
+        duration_seconds,
+        max_duration_seconds=_require_settings().subscribe_max_seconds,
     )
 
 
@@ -545,24 +456,12 @@ async def get_current_knx(
     (exact), ``function`` (exact, e.g. ``"Beleuchtung"``), ``name`` (substring).
     ``only_active=True`` returns only GAs whose current value is "on".
     """
-    log.info(
-        "tool_invoked",
-        tool="get_current_knx",
+    return await live_tools.get_current_knx(
         room=room,
         function=function,
         name=name,
         only_active=only_active,
-    )
-    return await _instrumented(
-        "get_current_knx",
-        live_tools.get_current_knx(
-            settings=_require_settings(),
-            room=room,
-            function=function,
-            name=name,
-            only_active=only_active,
-            limit=limit,
-        ),
+        limit=limit,
     )
 
 
@@ -649,5 +548,5 @@ def build_app() -> Starlette:
         ),
         Mount("/", app=mcp_app),
     ]
-    middleware = [Middleware(auth_module.AuthMiddleware, settings=_settings)]
+    middleware = [StarletteMiddleware(auth_module.AuthMiddleware, settings=_settings)]
     return Starlette(routes=routes, middleware=middleware, lifespan=lifespan)

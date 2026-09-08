@@ -13,13 +13,13 @@ from testcontainers.postgres import PostgresContainer
 
 from iot_mcp_bridge import db
 from iot_mcp_bridge.config import Settings
-from iot_mcp_bridge.tools import schema as schema_tools
+from iot_mcp_bridge.tools import sources
 
 
 @pytest.fixture(autouse=True)
 def _fresh_sources_cache() -> None:
     """Drop the data-source catalog TTL cache so tests stay order-independent."""
-    schema_tools.invalidate_cache()
+    sources.invalidate_cache()
 
 
 # TimescaleDB image with the extension preinstalled.

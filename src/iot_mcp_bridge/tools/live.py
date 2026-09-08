@@ -6,7 +6,7 @@ window. Both translate the homelab's NATS subject layout into LLM-friendly
 fields and fall back to the last TSDB row only when JetStream never saw a subject.
 
 Freshness is domain-aware: cyclic sensors (heating/dhw/solar publish every few
-seconds) carry a ``stale`` flag once they go quiet past ``live_stale_seconds``;
+seconds) carry a ``stale`` flag once they go quiet past the stale threshold;
 event-driven domains (knx switch state, wallbox charger state publish only on
 change) are never "stale" — the last value is still the truth, so they report
 the raw ``freshness_seconds`` age and let the caller judge.
@@ -23,12 +23,10 @@ from typing import Any
 
 from psycopg import sql
 
+from .. import db
 from .. import metrics as metrics_module
 from .. import nats as nats_module
-from ..config import Settings
-from ..db import connection
 from ..logging_setup import get_logger
-from .domain import _serialize_row
 
 log = get_logger(__name__)
 
@@ -82,8 +80,9 @@ _GA_RE = re.compile(r"^(\d{1,2})[/.](\d{1,2})[/.](\d{1,4})$")
 
 async def get_current_state(
     domain: str,
-    settings: Settings,
     identifier: str | None = None,
+    *,
+    stale_after_seconds: int,
 ) -> dict[str, Any]:
     """Current state of a homelab domain, read live from NATS JetStream.
 
@@ -94,7 +93,7 @@ async def get_current_state(
     When JetStream holds a message for the domain → ``status: "ok"`` with the
     live ``state``, an ``as_of`` timestamp and a ``freshness_seconds`` age. For
     cyclic domains (heating/dhw/solar) a ``stale: true`` flag is added once the
-    age exceeds ``live_stale_seconds`` (the sensor went quiet). Event-driven
+    age exceeds ``stale_after_seconds`` (the sensor went quiet). Event-driven
     domains (knx/wallbox) omit ``stale`` — an old value is still current.
 
     When the subject was never seen on NATS → ``status: "unknown"`` with
@@ -133,7 +132,7 @@ async def get_current_state(
         "state": state,
     }
     if key in _CYCLIC_DOMAINS:
-        resp["stale"] = freshness > settings.live_stale_seconds
+        resp["stale"] = freshness > stale_after_seconds
     return resp
 
 
@@ -260,6 +259,7 @@ _DISPATCH: dict[str, Callable[[str | None], Awaitable[tuple[dict[str, Any], date
 
 
 async def _tsdb_fallback(domain: str, identifier: str | None) -> dict[str, Any] | None:
+    stmt: db.Statement
     params: tuple[Any, ...]
     if domain == "heating":
         stmt, params, table = (
@@ -300,14 +300,12 @@ async def _tsdb_fallback(domain: str, identifier: str | None) -> dict[str, Any] 
     else:
         return None
 
-    metrics_module.get().db_queries.labels(tool="get_current_state", table_used=table).inc()
     try:
-        async with connection() as conn:
-            row = await (await conn.execute(stmt, params)).fetchone()
+        newest = await db.lookup("get_current_state", table, stmt, params)
     except Exception as exc:  # fallback is best-effort
         log.warning("tsdb_fallback_failed", domain=domain, error=str(exc))
         return None
-    return _serialize_row(row) if row else None
+    return newest[0] if newest else None
 
 
 # =====================================================================
@@ -317,8 +315,9 @@ async def _tsdb_fallback(domain: str, identifier: str | None) -> dict[str, Any] 
 
 async def subscribe_nats(
     subject: str,
-    settings: Settings,
     duration_seconds: int = 10,
+    *,
+    max_duration_seconds: int,
 ) -> dict[str, Any]:
     """Tail a NATS subject for a short window and return the collected messages.
 
@@ -326,16 +325,14 @@ async def subscribe_nats(
     must start with a known stream prefix (``knx.`` | ``ems-esp.`` |
     ``solaredge-1.`` | ``solaredge-2.`` | ``warp.``) and carry at least two
     concrete tokens before any wildcard, so top-level firehoses like ``knx.>``
-    are rejected. ``duration_seconds`` is hard-capped at ``subscribe_max_seconds``.
+    are rejected. ``duration_seconds`` is hard-capped at ``max_duration_seconds``.
     """
     subject = subject.strip()
     _validate_subscribe_subject(subject)
     if duration_seconds <= 0:
         raise ValueError(f"invalid_duration: {duration_seconds}; must be > 0")
-    if duration_seconds > settings.subscribe_max_seconds:
-        raise ValueError(
-            f"duration_too_long: {duration_seconds} > {settings.subscribe_max_seconds}s cap"
-        )
+    if duration_seconds > max_duration_seconds:
+        raise ValueError(f"duration_too_long: {duration_seconds} > {max_duration_seconds}s cap")
 
     msgs = await nats_module.tail(subject, float(duration_seconds), _SUBSCRIBE_MAX_MESSAGES)
     prefix = subject.split(".", 1)[0]
@@ -370,7 +367,6 @@ def _validate_subscribe_subject(subject: str) -> None:
 
 
 async def get_current_knx(
-    settings: Settings,
     room: str | None = None,
     function: str | None = None,
     name: str | None = None,
@@ -391,10 +387,6 @@ async def get_current_knx(
     current value is "on" (boolean true or a number > 0). GAs with no retained
     NATS message are omitted.
     """
-    if limit <= 0:
-        raise ValueError(f"invalid_limit: {limit}")
-    effective_limit = min(limit, settings.query_row_limit)
-
     where: list[sql.Composable] = []
     params: list[Any] = []
     if room is not None:
@@ -407,15 +399,13 @@ async def get_current_knx(
         where.append(sql.SQL("name ILIKE %s"))
         params.append(f"%{name}%")
     clause = sql.SQL(" WHERE ") + sql.SQL(" AND ").join(where) if where else sql.SQL("")
-    params.append(effective_limit)
     catalog_sql = sql.SQL(
-        "SELECT ga, name AS ga_name, room, function, dpt FROM ga_catalog{clause} "
-        "ORDER BY ga LIMIT %s"
+        "SELECT ga, name AS ga_name, room, function, dpt FROM ga_catalog{clause} ORDER BY ga"
     ).format(clause=clause)
-
-    metrics_module.get().db_queries.labels(tool="get_current_knx", table_used="ga_catalog").inc()
-    async with connection() as conn:
-        catalog = await (await conn.execute(catalog_sql, params)).fetchall()
+    matched = await db.read(
+        "get_current_knx", "ga_catalog", catalog_sql, params, limit=limit, overflow="truncate"
+    )
+    catalog = matched.rows
 
     filter_used = {"room": room, "function": function, "name": name, "only_active": only_active}
     if not catalog:
@@ -447,8 +437,6 @@ async def get_current_knx(
                 "age_seconds": round(_age_seconds(ts), 1),
             }
         )
-        if len(states) >= effective_limit:
-            break
 
     return {
         "count": len(states),

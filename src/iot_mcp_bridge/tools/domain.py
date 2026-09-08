@@ -7,23 +7,12 @@ from typing import Any
 
 from psycopg import sql
 
-from .. import metrics as metrics_module
-from ..config import Settings
-from ..db import connection
-from .timeseries import _coarser_or_equal_to_hour, _resolve_table, _validate_interval
+from .. import db
+from ..interval import Interval
+from . import sources
 
-
-def _serialize_row(row: dict[str, Any]) -> dict[str, Any]:
-    return {k: (v.isoformat() if isinstance(v, datetime) else v) for k, v in row.items()}
-
-
-def _check_row_limit(rows: list[Any], row_limit: int, hint: str) -> None:
-    """Guard for the aggregation tools: computing sums/averages on a truncated
-    result would be silently wrong, so exceeding the cap is an error. The
-    event-log tools truncate and flag instead (newest-first stays meaningful)."""
-    if len(rows) > row_limit:
-        raise ValueError(f"row_limit_exceeded: result would exceed {row_limit} rows; {hint}")
-
+# The hint an aggregation tool attaches when it refuses an over-cap result.
+_AGGREGATE_HINT = "widen the bucket or shorten the time range"
 
 # =====================================================================
 # query_energy_flow
@@ -54,7 +43,6 @@ _ENERGY_FLOW_SQL = sql.SQL(
         GROUP BY bucket
     ) m USING (bucket)
     ORDER BY bucket
-    LIMIT %s
     """
 )
 
@@ -62,7 +50,6 @@ _ENERGY_FLOW_SQL = sql.SQL(
 async def query_energy_flow(
     from_ts: str | datetime,
     to_ts: str | datetime,
-    settings: Settings,
     bucket: str = "1 hour",
 ) -> dict[str, Any]:
     """Joined energy flow per bucket: PV / grid / consumer / battery / wallbox.
@@ -72,28 +59,24 @@ async def query_energy_flow(
     them on ``bucket``. Buckets coarser than the underlying CAGG (``1 hour``)
     are aggregated with ``avg()``.
     """
-    bucket = _validate_interval(bucket)
-    if not _coarser_or_equal_to_hour(bucket):
+    width = Interval.parse(bucket)
+    if not width.at_least_hourly:
         raise ValueError(f"invalid_bucket: {bucket!r} — energy_flow uses 1h CAGGs, need >=1 hour")
 
-    row_limit = settings.query_row_limit
-    m = metrics_module.get()
-    m.db_queries.labels(tool="query_energy_flow", table_used="solaredge_powerflow_1h").inc()
-    with m.db_query_duration.labels(tool="query_energy_flow").time():
-        async with connection() as conn:
-            cur = await conn.execute(
-                _ENERGY_FLOW_SQL,
-                (from_ts, to_ts, from_ts, to_ts, row_limit + 1),
-            )
-            rows = await cur.fetchall()
-
-    _check_row_limit(rows, row_limit, "widen the bucket or shorten the time range")
+    result = await db.read(
+        "query_energy_flow",
+        "solaredge_powerflow_1h",
+        _ENERGY_FLOW_SQL,
+        (from_ts, to_ts, from_ts, to_ts),
+        overflow="error",
+        hint=_AGGREGATE_HINT,
+    )
     return {
-        "bucket": bucket,
+        "bucket": str(width),
         "from_ts": str(from_ts),
         "to_ts": str(to_ts),
-        "row_count": len(rows),
-        "rows": [_serialize_row(r) for r in rows],
+        "row_count": len(result.rows),
+        "rows": result.rows,
     }
 
 
@@ -137,7 +120,6 @@ _HEATING_CYCLES_SQL = sql.SQL(
     FROM aggregated
     WHERE duration_seconds >= %s
     ORDER BY start_ts
-    LIMIT %s
     """
 )
 
@@ -145,7 +127,6 @@ _HEATING_CYCLES_SQL = sql.SQL(
 async def query_heating_cycles(
     from_ts: str | datetime,
     to_ts: str | datetime,
-    settings: Settings,
     min_duration_seconds: int = 60,
 ) -> dict[str, Any]:
     """Detect ON/OFF burner cycles from raw ``ems_esp`` boiler telemetry.
@@ -158,28 +139,22 @@ async def query_heating_cycles(
     if min_duration_seconds < 0:
         raise ValueError(f"invalid_min_duration_seconds: {min_duration_seconds}")
 
-    row_limit = settings.query_row_limit
-    m = metrics_module.get()
-    m.db_queries.labels(tool="query_heating_cycles", table_used="ems_esp").inc()
-    with m.db_query_duration.labels(tool="query_heating_cycles").time():
-        async with connection() as conn:
-            cur = await conn.execute(
-                _HEATING_CYCLES_SQL,
-                (from_ts, to_ts, min_duration_seconds, row_limit + 1),
-            )
-            rows = await cur.fetchall()
-
-    _check_row_limit(rows, row_limit, "shorten the time range or raise min_duration_seconds")
-
-    serialized = [_serialize_row(r) for r in rows]
-    total_runtime = sum(float(r["duration_seconds"]) for r in serialized)
+    result = await db.read(
+        "query_heating_cycles",
+        "ems_esp",
+        _HEATING_CYCLES_SQL,
+        (from_ts, to_ts, min_duration_seconds),
+        overflow="error",
+        hint="shorten the time range or raise min_duration_seconds",
+    )
+    total_runtime = sum(float(r["duration_seconds"]) for r in result.rows)
     return {
         "from_ts": str(from_ts),
         "to_ts": str(to_ts),
         "min_duration_seconds": min_duration_seconds,
-        "cycle_count": len(serialized),
+        "cycle_count": len(result.rows),
         "total_runtime_seconds": total_runtime,
-        "cycles": serialized,
+        "cycles": result.rows,
     }
 
 
@@ -194,22 +169,19 @@ _DISTINCT_FUNCTIONS_SQL = (
 
 
 async def _known_rooms() -> list[str]:
-    async with connection() as conn:
-        rows = await (await conn.execute(_DISTINCT_ROOMS_SQL)).fetchall()
-    return [r["room"] for r in rows]
+    known = await db.lookup("query_room_climate", "ga_catalog", _DISTINCT_ROOMS_SQL)
+    return [r["room"] for r in known]
 
 
 async def _known_functions() -> list[str]:
-    async with connection() as conn:
-        rows = await (await conn.execute(_DISTINCT_FUNCTIONS_SQL)).fetchall()
-    return [r["function"] for r in rows]
+    known = await db.lookup("query_knx_events", "ga_catalog", _DISTINCT_FUNCTIONS_SQL)
+    return [r["function"] for r in known]
 
 
 async def query_room_climate(
     room: str,
     from_ts: str | datetime,
     to_ts: str | datetime,
-    settings: Settings,
     bucket: str = "1 hour",
     functions: list[str] | None = None,
 ) -> dict[str, Any]:
@@ -223,7 +195,7 @@ async def query_room_climate(
     ``query_knx_events`` / ``get_schema``). When omitted, all GAs in the room
     are aggregated — the project's function vocabulary is not assumed.
     """
-    bucket = _validate_interval(bucket)
+    width = Interval.parse(bucket)
 
     valid_rooms = await _known_rooms()
     if room not in valid_rooms:
@@ -233,11 +205,10 @@ async def query_room_climate(
         sql.SQL("room = %s"),
         sql.SQL("time BETWEEN %s AND %s"),
     ]
-    params: list[Any] = [bucket, room, from_ts, to_ts]
+    params: list[Any] = [str(width), room, from_ts, to_ts]
     if functions:
         where_parts.append(sql.SQL("function = ANY(%s)"))
         params.append(list(functions))
-    params.append(settings.query_row_limit + 1)
 
     stmt = sql.SQL(
         """
@@ -249,27 +220,24 @@ async def query_room_climate(
         WHERE {where}
         GROUP BY bucket, ga_name
         ORDER BY bucket, ga_name
-        LIMIT %s
         """
     ).format(where=sql.SQL(" AND ").join(where_parts))
-
-    row_limit = settings.query_row_limit
-    m = metrics_module.get()
-    m.db_queries.labels(tool="query_room_climate", table_used="ga_catalog_view").inc()
-    with m.db_query_duration.labels(tool="query_room_climate").time():
-        async with connection() as conn:
-            cur = await conn.execute(stmt, params)
-            rows = await cur.fetchall()
-
-    _check_row_limit(rows, row_limit, "widen the bucket or shorten the time range")
+    result = await db.read(
+        "query_room_climate",
+        "ga_catalog_view",
+        stmt,
+        params,
+        overflow="error",
+        hint=_AGGREGATE_HINT,
+    )
     return {
         "room": room,
-        "bucket": bucket,
+        "bucket": str(width),
         "from_ts": str(from_ts),
         "to_ts": str(to_ts),
         "functions": functions,
-        "row_count": len(rows),
-        "rows": [_serialize_row(r) for r in rows],
+        "row_count": len(result.rows),
+        "rows": result.rows,
     }
 
 
@@ -281,7 +249,6 @@ async def query_room_climate(
 async def query_knx_events(
     from_ts: str | datetime,
     to_ts: str | datetime,
-    settings: Settings,
     room: str | None = None,
     ga: str | None = None,
     name: str | None = None,
@@ -300,16 +267,12 @@ async def query_knx_events(
                       ``["Beleuchtung", "Schalten"]``); validated against
                       the catalog so invalid names produce a precise error
 
-    Default ``limit`` is 200 (typical "what happened recently" window).
-    Effective cap is ``min(limit, settings.query_row_limit)``. When more rows
-    match, the newest ``limit`` rows are returned with ``truncated: true`` —
-    the newest-first ordering keeps a truncated event log meaningful (unlike
-    the aggregation tools, which error instead of computing on partial data).
+    Default ``limit`` is 200 (typical "what happened recently" window),
+    capped at the server's row limit. When more rows match, the newest
+    ``limit`` rows are returned with ``truncated: true`` — the newest-first
+    ordering keeps a truncated event log meaningful (unlike the aggregation
+    tools, which error instead of computing on partial data).
     """
-    if limit <= 0:
-        raise ValueError(f"invalid_limit: {limit}")
-    effective_limit = min(limit, settings.query_row_limit)
-
     if functions:
         valid_functions = await _known_functions()
         unknown = sorted(set(functions) - set(valid_functions))
@@ -330,7 +293,6 @@ async def query_knx_events(
     if functions:
         where_parts.append(sql.SQL("function = ANY(%s)"))
         params.append(list(functions))
-    params.append(effective_limit + 1)
 
     stmt = sql.SQL(
         """
@@ -338,26 +300,19 @@ async def query_knx_events(
         FROM ga_catalog_view
         WHERE {where}
         ORDER BY time DESC
-        LIMIT %s
         """
     ).format(where=sql.SQL(" AND ").join(where_parts))
-
-    m = metrics_module.get()
-    m.db_queries.labels(tool="query_knx_events", table_used="ga_catalog_view").inc()
-    with m.db_query_duration.labels(tool="query_knx_events").time():
-        async with connection() as conn:
-            rows = await (await conn.execute(stmt, params)).fetchall()
-
-    truncated = len(rows) > effective_limit
-    rows = rows[:effective_limit]
+    result = await db.read(
+        "query_knx_events", "ga_catalog_view", stmt, params, limit=limit, overflow="truncate"
+    )
     return {
         "from_ts": str(from_ts),
         "to_ts": str(to_ts),
         "filters": {"room": room, "ga": ga, "name": name, "functions": functions},
-        "limit": effective_limit,
-        "row_count": len(rows),
-        "truncated": truncated,
-        "rows": [_serialize_row(r) for r in rows],
+        "limit": result.limit,
+        "row_count": len(result.rows),
+        "truncated": result.truncated,
+        "rows": result.rows,
     }
 
 
@@ -369,7 +324,6 @@ async def query_knx_events(
 async def query_unifi_events(
     from_ts: str | datetime,
     to_ts: str | datetime,
-    settings: Settings,
     camera: str | None = None,
     detection_type: str | None = None,
     event_type: str | None = None,
@@ -396,15 +350,11 @@ async def query_unifi_events(
                            lives in ``sourceEvent.score``
     * ``event_id``       — exact UUID; use to look up details for one alarm
 
-    Default ``limit`` is 200; effective cap is
-    ``min(limit, settings.query_row_limit)``. When more rows match, the
-    newest ``limit`` rows are returned with ``truncated: true``.
+    Default ``limit`` is 200, capped at the server's row limit. When more
+    rows match, the newest ``limit`` rows are returned with ``truncated: true``.
     """
-    if limit <= 0:
-        raise ValueError(f"invalid_limit: {limit}")
     if min_score is not None and not 0 <= min_score <= 100:
         raise ValueError(f"invalid_min_score: {min_score}; must be 0..100")
-    effective_limit = min(limit, settings.query_row_limit)
 
     where_parts: list[sql.Composable] = [sql.SQL("time BETWEEN %s AND %s")]
     params: list[Any] = [from_ts, to_ts]
@@ -423,7 +373,6 @@ async def query_unifi_events(
     if event_id is not None:
         where_parts.append(sql.SQL("event_id = %s"))
         params.append(event_id)
-    params.append(effective_limit + 1)
 
     stmt = sql.SQL(
         """
@@ -431,18 +380,11 @@ async def query_unifi_events(
         FROM unifi_events
         WHERE {where}
         ORDER BY time DESC
-        LIMIT %s
         """
     ).format(where=sql.SQL(" AND ").join(where_parts))
-
-    m = metrics_module.get()
-    m.db_queries.labels(tool="query_unifi_events", table_used="unifi_events").inc()
-    with m.db_query_duration.labels(tool="query_unifi_events").time():
-        async with connection() as conn:
-            rows = await (await conn.execute(stmt, params)).fetchall()
-
-    truncated = len(rows) > effective_limit
-    rows = rows[:effective_limit]
+    result = await db.read(
+        "query_unifi_events", "unifi_events", stmt, params, limit=limit, overflow="truncate"
+    )
     return {
         "from_ts": str(from_ts),
         "to_ts": str(to_ts),
@@ -453,10 +395,10 @@ async def query_unifi_events(
             "min_score": min_score,
             "event_id": event_id,
         },
-        "limit": effective_limit,
-        "row_count": len(rows),
-        "truncated": truncated,
-        "rows": [_serialize_row(r) for r in rows],
+        "limit": result.limit,
+        "row_count": len(result.rows),
+        "truncated": result.truncated,
+        "rows": result.rows,
     }
 
 
@@ -491,9 +433,10 @@ _CORRELATE_SQL_TEMPLATE = sql.SQL(
         GROUP BY lags.lag
         HAVING COUNT(*) >= 3
     )
-    SELECT lag, c, n FROM joined ORDER BY abs(c) DESC NULLS LAST LIMIT %s
+    SELECT lag, c, n FROM joined ORDER BY abs(c) DESC NULLS LAST
     """
 )
+_CORRELATE_TOP_N = 10
 
 
 async def correlate_events(
@@ -501,7 +444,6 @@ async def correlate_events(
     source_b: dict[str, Any],
     from_ts: str | datetime,
     to_ts: str | datetime,
-    settings: Settings,
     window: str = "15 minutes",
     bucket: str = "1 minute",
 ) -> dict[str, Any]:
@@ -512,48 +454,45 @@ async def correlate_events(
     ``[-N, +N]`` (where ``N = window / bucket``) the correlation is computed
     over matched buckets. The top 10 lags by ``|corr|`` are returned.
     """
-    bucket = _validate_interval(bucket)
-    window = _validate_interval(window)
+    width = Interval.parse(bucket)
+    span = Interval.parse(window)
 
-    n_lags = _interval_ratio(window, bucket)
+    n_lags = span // width
     if n_lags <= 0:
         raise ValueError(f"window must be larger than bucket; got window={window}, bucket={bucket}")
 
-    table_a = source_a["table"]
     column_a = source_a["column"]
-    table_b = source_b["table"]
     column_b = source_b["column"]
-
-    target_a, schema_a, _, time_col_a = await _resolve_table(table_a, bucket)
-    target_b, schema_b, _, time_col_b = await _resolve_table(table_b, bucket)
+    a = await sources.resolve(source_a["table"], width)
+    b = await sources.resolve(source_b["table"], width)
 
     stmt = _CORRELATE_SQL_TEMPLATE.format(
-        time_a=sql.Identifier(time_col_a),
+        time_a=sql.Identifier(a.time_column),
         col_a=sql.Identifier(column_a),
-        tbl_a=sql.Identifier(schema_a, target_a),
-        time_b=sql.Identifier(time_col_b),
+        tbl_a=sql.Identifier(a.schema, a.name),
+        time_b=sql.Identifier(b.time_column),
         col_b=sql.Identifier(column_b),
-        tbl_b=sql.Identifier(schema_b, target_b),
+        tbl_b=sql.Identifier(b.schema, b.name),
     )
-    top_n = min(10, settings.query_row_limit)
     params = (
-        bucket,
+        str(width),
         from_ts,
         to_ts,
-        bucket,
+        str(width),
         from_ts,
         to_ts,
         n_lags,
         n_lags,
-        bucket,
-        top_n,
+        str(width),
     )
-
-    m = metrics_module.get()
-    m.db_queries.labels(tool="correlate_events", table_used=f"{target_a}+{target_b}").inc()
-    with m.db_query_duration.labels(tool="correlate_events").time():
-        async with connection() as conn:
-            rows = await (await conn.execute(stmt, params)).fetchall()
+    result = await db.read(
+        "correlate_events",
+        f"{a.name}+{b.name}",
+        stmt,
+        params,
+        limit=_CORRELATE_TOP_N,
+        overflow="truncate",
+    )
 
     top: list[dict[str, Any]] = [
         {
@@ -561,34 +500,14 @@ async def correlate_events(
             "corr": float(r["c"]) if r["c"] is not None else None,
             "samples": int(r["n"]),
         }
-        for r in rows
+        for r in result.rows
     ]
-    best = top[0] if top else None
     return {
-        "source_a": {"table": target_a, "column": column_a, "time_column": time_col_a},
-        "source_b": {"table": target_b, "column": column_b, "time_column": time_col_b},
-        "bucket": bucket,
-        "window": window,
+        "source_a": {"table": a.name, "column": column_a, "time_column": a.time_column},
+        "source_b": {"table": b.name, "column": column_b, "time_column": b.time_column},
+        "bucket": str(width),
+        "window": str(span),
         "n_lags": n_lags,
-        "best": best,
+        "best": top[0] if top else None,
         "top": top,
     }
-
-
-def _interval_ratio(window: str, bucket: str) -> int:
-    """Compute how many ``bucket``-units fit into ``window`` (integer divide)."""
-    units_per_second = {
-        "second": 1,
-        "minute": 60,
-        "hour": 3600,
-        "day": 86400,
-        "week": 604800,
-        "month": 2_592_000,
-    }
-
-    def _to_seconds(label: str) -> int:
-        n_str, unit = label.split(maxsplit=1)
-        unit = unit.lower().rstrip("s")
-        return int(n_str) * units_per_second[unit]
-
-    return _to_seconds(window) // _to_seconds(bucket)

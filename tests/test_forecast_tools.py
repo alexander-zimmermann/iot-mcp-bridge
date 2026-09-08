@@ -48,21 +48,17 @@ async def seeded_pv_forecast(settings: Settings, db_pool: None) -> AsyncIterator
         conn.close()
 
 
-async def test_get_pv_forecast_returns_seeded_rows(
-    settings: Settings, seeded_pv_forecast: None
-) -> None:
-    result = await forecasts.get_pv_forecast(settings=settings, hours=24)
+async def test_get_pv_forecast_returns_seeded_rows(seeded_pv_forecast: None) -> None:
+    result = await forecasts.get_pv_forecast(hours=24)
     assert result["metric"] == "pv_production"
     assert result["row_count"] == 6
     assert "note" not in result
     assert all(r["model"] == "forecast_solar" for r in result["rows"])
 
 
-async def test_get_pv_forecast_respects_horizon(
-    settings: Settings, seeded_pv_forecast: None
-) -> None:
+async def test_get_pv_forecast_respects_horizon(seeded_pv_forecast: None) -> None:
     # Only the first 3 hourly rows fall inside a 3h horizon.
-    result = await forecasts.get_pv_forecast(settings=settings, hours=3)
+    result = await forecasts.get_pv_forecast(hours=3)
     assert result["row_count"] == 3
 
 
@@ -72,7 +68,7 @@ async def test_get_pv_forecast_empty_sets_note(settings: Settings, db_pool: None
         conn.execute("TRUNCATE TABLE mcp_forecasts")
     finally:
         conn.close()
-    result = await forecasts.get_pv_forecast(settings=settings, hours=48)
+    result = await forecasts.get_pv_forecast(hours=48)
     assert result["row_count"] == 0
     assert "check forecast-solar CronJob health" in result["note"]
 
@@ -113,10 +109,8 @@ async def seeded_weather_forecast(settings: Settings, db_pool: None) -> AsyncIte
         conn.close()
 
 
-async def test_get_weather_forecast_pivots_per_hour(
-    settings: Settings, seeded_weather_forecast: None
-) -> None:
-    result = await forecasts.get_weather_forecast(settings=settings, hours=24)
+async def test_get_weather_forecast_pivots_per_hour(seeded_weather_forecast: None) -> None:
+    result = await forecasts.get_weather_forecast(hours=24)
     assert result["model"] == "open_meteo"
     # 2 distinct forecast hours, each a dict carrying all 3 metrics.
     assert result["row_count"] == 2
@@ -126,11 +120,9 @@ async def test_get_weather_forecast_pivots_per_hour(
     assert first["temperature"] == 15.0
 
 
-async def test_get_weather_forecast_respects_horizon(
-    settings: Settings, seeded_weather_forecast: None
-) -> None:
+async def test_get_weather_forecast_respects_horizon(seeded_weather_forecast: None) -> None:
     # Only the first forecast hour falls inside a 1h horizon.
-    result = await forecasts.get_weather_forecast(settings=settings, hours=1)
+    result = await forecasts.get_weather_forecast(hours=1)
     assert result["row_count"] == 1
 
 
@@ -140,7 +132,7 @@ async def test_get_weather_forecast_empty_sets_note(settings: Settings, db_pool:
         conn.execute("TRUNCATE TABLE mcp_forecasts")
     finally:
         conn.close()
-    result = await forecasts.get_weather_forecast(settings=settings, hours=48)
+    result = await forecasts.get_weather_forecast(hours=48)
     assert result["row_count"] == 0
     assert "check forecast-weather CronJob health" in result["note"]
 
@@ -182,16 +174,12 @@ async def seeded_seasonal_forecast(settings: Settings, db_pool: None) -> AsyncIt
         conn.close()
 
 
-async def test_get_forecast_returns_seeded_rows(
-    settings: Settings, seeded_seasonal_forecast: None
-) -> None:
-    result = await forecasts.get_forecast(settings=settings, metric="pv_production_avg")
+async def test_get_forecast_returns_seeded_rows(seeded_seasonal_forecast: None) -> None:
+    result = await forecasts.get_forecast(metric="pv_production_avg")
     assert result["metric"] == "pv_production_avg"
     assert result["row_count"] == 4
 
 
-async def test_get_forecast_unknown_metric_empty(
-    settings: Settings, seeded_seasonal_forecast: None
-) -> None:
-    result = await forecasts.get_forecast(settings=settings, metric="does_not_exist")
+async def test_get_forecast_unknown_metric_empty(seeded_seasonal_forecast: None) -> None:
+    result = await forecasts.get_forecast(metric="does_not_exist")
     assert result["row_count"] == 0
