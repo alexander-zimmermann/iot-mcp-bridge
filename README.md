@@ -62,6 +62,20 @@ behind high-level questions:
 | `get_current_knx(room, function, name, …)`    | Current value per matching KNX group address — answers "which lights are on right now?".                      |
 | `subscribe_nats(subject, duration_seconds)`   | Tails an allowlisted NATS subject for a short bounded window.                                                  |
 
+**Wiki** (the house's human-written references in [Wiki.js](https://js.wiki/); requires `MCP_WIKIJS_URL` + `MCP_WIKIJS_TOKEN_FILE`)
+
+| Tool                                | What it does                                                                                                        |
+| ----------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `search_wiki(query)`                | Title/description/path search (`pages.search`); returns ids and paths to read.                                      |
+| `get_wiki_page(path \| page_id)`    | One page in full — raw Markdown `content` plus title, tags and dates. Locale comes from the page, never hardcoded.  |
+| `list_wiki_pages()`                 | The table of contents (`pages.list`): id, path, locale, title, description, `updated_at` of every readable page.     |
+
+The wiki key is read-only by construction: its Wiki.js group carries exactly
+`read:pages` and `read:source`. Wiki.js 2.x guards the GraphQL `pages.single` /
+`pages.singleByPath` queries with the `manage:pages` *edit* permission, so page
+content is read from the source view (`GET /s/<locale>/<path>`, `read:source`)
+instead — the one read-only route to raw content. There is no write tool.
+
 Later phases (tracked separately) add optimization advisors and
 approval-gated control.
 
@@ -138,13 +152,15 @@ All settings are environment variables, prefixed with `MCP_`:
 | `MCP_NATS_NKEY_SEED_FILE`            | —                           | nkey seed file for NATS auth (anonymous when unset)            |
 | `MCP_LIVE_STALE_SECONDS`             | `600`                       | Age after which cyclic live state is flagged `stale`           |
 | `MCP_SUBSCRIBE_MAX_SECONDS`          | `30`                        | Hard cap for `subscribe_nats` windows                          |
+| `MCP_WIKIJS_URL`                     | —                           | Wiki.js base URL; with the token file enables the wiki tools   |
+| `MCP_WIKIJS_TOKEN_FILE`              | —                           | Read-only Wiki.js API key from a mounted file                  |
 
 When `MCP_AUTH_ENABLED=true`, every request must carry a valid OIDC Bearer token signed by the configured JWKS. Tested against [Authentik](https://goauthentik.io/) but works with any OIDC-compliant authorization server.
 
 ### Operational endpoints
 
 - `GET /livez` — liveness: process is up; never depends on DB/NATS health.
-- `GET /healthz` — readiness/deep health: 503 when the database is unreachable; reports NATS connectivity when the live tools are enabled.
+- `GET /healthz` — readiness/deep health: 503 when the database is unreachable; reports NATS connectivity when the live tools are enabled. The wiki is never part of it — a wiki outage fails the wiki tools, not the pod.
 - `GET :9090/metrics` — Prometheus metrics (tool calls, DB query durations, JWKS refreshes, NATS fetches).
 
 ### Container image

@@ -43,6 +43,7 @@ from .tools import forecasts as forecasts_tools
 from .tools import live as live_tools
 from .tools import sources as sources_tools
 from .tools import timeseries as timeseries_tools
+from .tools import wiki as wiki_tools
 from .tools.episodes import EpisodeState
 from .tools.timeseries import Aggregation
 
@@ -465,6 +466,43 @@ async def get_current_knx(
     )
 
 
+@mcp.tool()
+async def search_wiki(query: str) -> dict[str, Any]:
+    """Search the house wiki — the human-written references: devices, vendor
+    docs digests, how-the-house-works notes.
+
+    Matches ``query`` against page titles, descriptions and paths. Returns
+    ``results`` (``id``, ``path``, ``locale``, ``title``, ``description``) and
+    ``total_hits``; read a hit in full with ``get_wiki_page``. When a search
+    comes up empty, ``list_wiki_pages`` is the table of contents.
+    """
+    return await wiki_tools.search_wiki(query)
+
+
+@mcp.tool()
+async def get_wiki_page(path: str | None = None, page_id: int | None = None) -> dict[str, Any]:
+    """One wiki page in full: its raw ``content`` (Markdown unless
+    ``content_type`` says otherwise) plus title, description, tags and dates.
+
+    Address it by ``path`` as returned by ``search_wiki`` / ``list_wiki_pages``
+    (e.g. ``"basalte/logic-blocks"``) or by numeric ``page_id`` — exactly one
+    of the two. A path that exists in several locales errors with the candidate
+    ids; call again with ``page_id``.
+    """
+    return await wiki_tools.get_wiki_page(path=path, page_id=page_id)
+
+
+@mcp.tool()
+async def list_wiki_pages() -> dict[str, Any]:
+    """Every wiki page the connector may read, ordered by path — ``id``,
+    ``path``, ``locale``, ``title``, ``description``, ``updated_at``.
+
+    The table of contents: use it to see where a topic lives, then read the
+    page with ``get_wiki_page``.
+    """
+    return await wiki_tools.list_wiki_pages()
+
+
 _settings: Settings | None = None
 
 
@@ -518,6 +556,8 @@ def build_app() -> Starlette:
         await db.init_write_pool(_settings)
         if _settings.nats_enabled:
             await nats_module.init(_settings)
+        if _settings.wikijs_enabled:
+            await wiki_tools.init(_settings)
         metrics_server, metrics_thread = metrics_module.serve(
             metrics_module.get(), _settings.metrics_port
         )
@@ -528,6 +568,7 @@ def build_app() -> Starlette:
             metrics_port=_settings.metrics_port,
             auth_enabled=_settings.auth_enabled,
             nats_enabled=_settings.nats_enabled,
+            wikijs_enabled=_settings.wikijs_enabled,
         )
         try:
             async with mcp_app.lifespan(app):
@@ -535,6 +576,7 @@ def build_app() -> Starlette:
         finally:
             metrics_server.shutdown()
             metrics_thread.join()
+            await wiki_tools.close()
             await nats_module.close()
             await db.close_pool()
 
