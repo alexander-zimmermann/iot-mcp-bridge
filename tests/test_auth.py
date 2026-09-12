@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import time
 from collections.abc import Iterator
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -131,6 +132,26 @@ def test_enabled_auth_requires_jwks_config() -> None:
         )
 
 
+def test_auth_clients_file_is_loaded(tmp_path: Path) -> None:
+    clients = tmp_path / "clients.json"
+    clients.write_text(json.dumps({"lares-agent": "k" * 40}), encoding="utf-8")
+    settings = _settings(auth_clients_file=str(clients))
+    assert settings.auth_clients == {"lares-agent": "k" * 40}
+    assert "k" * 40 not in repr(settings)
+
+
+def test_short_machine_client_key_is_rejected() -> None:
+    with pytest.raises(ValueError, match="at least 32 characters: lares-agent"):
+        _settings(auth_clients={"lares-agent": "short"})
+
+
+def test_malformed_clients_file_is_rejected(tmp_path: Path) -> None:
+    clients = tmp_path / "clients.json"
+    clients.write_text(json.dumps(["not", "an", "object"]), encoding="utf-8")
+    with pytest.raises(ValueError, match="JSON object of name to key"):
+        _settings(auth_clients_file=str(clients))
+
+
 # ------------- verify_token -------------
 
 
@@ -184,6 +205,32 @@ async def test_wrong_issuer_raises(configured: Settings, keypair: RSAPrivateKey)
     token = _sign(keypair, "key1", _claims(iss="https://attacker.test/"))
     with pytest.raises(AuthError, match="invalid_issuer"):
         await verify_token(token, configured)
+
+
+async def test_machine_key_yields_machine_principal(jwks_mock: respx.MockRouter) -> None:
+    settings = _settings(auth_clients={"lares-agent": "k" * 40, "other": "o" * 40})
+    auth_module.configure(settings)
+    principal = await verify_token("k" * 40, settings)
+    assert principal == Principal(
+        sub="lares-agent", client_id="lares-agent", claims={}, machine=True
+    )
+    assert principal.kind == "machine"
+
+
+async def test_unknown_key_falls_through_to_jwt(jwks_mock: respx.MockRouter) -> None:
+    """A key that matches no client is handled as a token, and fails as one."""
+    settings = _settings(auth_clients={"lares-agent": "k" * 40})
+    auth_module.configure(settings)
+    with pytest.raises(AuthError) as exc_info:
+        await verify_token("x" * 40, settings)
+    assert exc_info.value.reason == "invalid_token"
+
+
+def test_match_machine_client_compares_every_key() -> None:
+    clients = {"a": "a" * 40, "b": "b" * 40}
+    assert auth_module.match_machine_client("b" * 40, clients) == "b"
+    assert auth_module.match_machine_client("c" * 40, clients) is None
+    assert auth_module.match_machine_client("", clients) is None
 
 
 @pytest.mark.asyncio

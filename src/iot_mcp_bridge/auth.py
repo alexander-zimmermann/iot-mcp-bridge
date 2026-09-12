@@ -1,18 +1,24 @@
-"""Bearer-token validation against an OIDC JWKS endpoint.
+"""Bearer-token validation against an OIDC JWKS endpoint, or a static key.
 
 Activated when ``MCP_AUTH_ENABLED=true``. The MCP endpoint then requires a
 valid JWT issued by ``MCP_AUTH_ISSUER`` (Authentik in production), signed by
-a key from ``MCP_AUTH_JWKS_URL``, and bound to ``MCP_AUTH_AUDIENCE``.
+a key from ``MCP_AUTH_JWKS_URL``, and bound to ``MCP_AUTH_AUDIENCE`` — or one
+of the static API keys of ``MCP_AUTH_CLIENTS_FILE``, the path for machine
+clients (agents) that cannot run an OAuth flow. A key matches before any JWT
+parsing, so a key is never mistaken for a malformed token.
 
-The transport hook is ``AuthMiddleware`` (pure ASGI). On success it
-binds ``sub`` and ``client_id`` to structlog's contextvars so every log
-line emitted while handling the request carries the caller identity.
+The transport hook is ``AuthMiddleware`` (pure ASGI). On success it binds
+``sub``, ``client_id`` and ``client_kind`` (``user`` or ``machine``) to
+structlog's contextvars so every log line emitted while handling the
+request carries the caller identity, and the tool policy can read it.
 """
 
 from __future__ import annotations
 
 import asyncio
+import hmac
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 from urllib.parse import urlsplit, urlunsplit
@@ -37,6 +43,13 @@ class Principal:
     sub: str
     client_id: str | None
     claims: dict[str, object]
+    # True for a static-key client; the tool policy denies such a client
+    # everything it is not explicitly allowed.
+    machine: bool = False
+
+    @property
+    def kind(self) -> str:
+        return "machine" if self.machine else "user"
 
 
 class AuthError(Exception):
@@ -143,11 +156,28 @@ def configure(settings: Settings) -> None:
         _jwks = None
 
 
+def match_machine_client(token: str, clients: Mapping[str, str]) -> str | None:
+    """Name of the machine client whose key equals ``token``, or None.
+
+    Every configured key is compared in constant time, so neither the
+    response time nor an early return reveals which client a guess was
+    close to.
+    """
+    match: str | None = None
+    for name, key in clients.items():
+        if hmac.compare_digest(key.encode("utf-8"), token.encode("utf-8")):
+            match = name
+    return match
+
+
 async def verify_token(token: str | None, settings: Settings) -> Principal | None:
     if not settings.auth_enabled:
         return None
     if not token:
         raise AuthError("missing_bearer_token")
+    name = match_machine_client(token, settings.auth_clients)
+    if name is not None:
+        return Principal(sub=name, client_id=name, claims={}, machine=True)
     if _jwks is None:
         raise AuthError("auth_not_configured")
 
@@ -306,6 +336,7 @@ class AuthMiddleware:
         bound = structlog.contextvars.bind_contextvars(
             sub=principal.sub,
             client_id=principal.client_id,
+            client_kind=principal.kind,
         )
         log.info(
             "auth_accepted",

@@ -147,6 +147,8 @@ All settings are environment variables, prefixed with `MCP_`:
 | `MCP_AUTH_JWKS_TTL_SECONDS`          | `3600`                      | JWKS cache lifetime                                            |
 | `MCP_AUTH_JWKS_MIN_REFRESH_SECONDS`  | `30`                        | Cooldown between JWKS fetch attempts                           |
 | `MCP_AUTH_RESOURCE_URL`              | —                           | Public URL for RFC 9728 protected-resource metadata            |
+| `MCP_AUTH_CLIENTS_FILE`              | —                           | Machine clients: JSON object of client name to API key         |
+| `MCP_AUTH_CLIENT_TOOLS`              | `{}`                        | Tool allowlist per client name (JSON; names or fnmatch globs)  |
 | `MCP_NATS_ENABLED`                   | `true`                      | Enable the live tools (NATS JetStream)                         |
 | `MCP_NATS_SERVERS`                   | `nats://nats.nats.svc:4222` | Comma-separated NATS server URLs                               |
 | `MCP_NATS_NKEY_SEED_FILE`            | —                           | nkey seed file for NATS auth (anonymous when unset)            |
@@ -156,6 +158,8 @@ All settings are environment variables, prefixed with `MCP_`:
 | `MCP_WIKIJS_TOKEN_FILE`              | —                           | Read-only Wiki.js API key from a mounted file                  |
 
 When `MCP_AUTH_ENABLED=true`, every request must carry a valid OIDC Bearer token signed by the configured JWKS. Tested against [Authentik](https://goauthentik.io/) but works with any OIDC-compliant authorization server.
+
+An agent that cannot run an OAuth flow authenticates with a static API key instead: `MCP_AUTH_CLIENTS_FILE` points at a mounted Secret holding `{"<client name>": "<key>"}` (keys of at least 32 characters), sent as `Authorization: Bearer <key>`. Such a machine client sees only the tools its entry in `MCP_AUTH_CLIENT_TOOLS` names, for example `{"lares-agent": ["list_episodes", "query_*", "get_*", "resolve"]}`; a machine client without an entry sees no tools, a user without one keeps every tool. Denied calls are counted in the tool-call metric with outcome `denied`.
 
 ### Operational endpoints
 

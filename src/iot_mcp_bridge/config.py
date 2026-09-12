@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Literal
 from urllib.parse import quote
@@ -57,6 +58,17 @@ class Settings(BaseSettings):
     auth_jwks_min_refresh_seconds: float = 30.0
     auth_resource_url: str | None = None
 
+    # Machine clients: an agent that cannot run an OAuth flow authenticates
+    # with a static API key instead of a JWT. The keys arrive as a mounted
+    # Secret file (a JSON object of client name to key, keys at least 32
+    # characters); the tool allowlist per client name is plain configuration
+    # (a JSON object of client name to tool names or fnmatch globs). A
+    # machine client without an allowlist entry sees no tools; a user client
+    # without one keeps every tool.
+    auth_clients_file: str | None = None
+    auth_clients: dict[str, str] = Field(default_factory=dict, repr=False)
+    auth_client_tools: dict[str, list[str]] = Field(default_factory=dict)
+
     # NATS: live current-state reads from JetStream (last message per subject).
     # The nkey seed arrives as a mounted Secret file, same as the DB credentials;
     # connects anonymously when unset. Disabled in tests/dev where the layer is
@@ -106,6 +118,21 @@ class Settings(BaseSettings):
             ]
             if missing:
                 raise ValueError(f"MCP_AUTH_ENABLED=true requires {', '.join(missing)}")
+        return self
+
+    @model_validator(mode="after")
+    def _resolve_auth_clients_file(self) -> Settings:
+        if self.auth_clients_file:
+            raw = json.loads(Path(self.auth_clients_file).read_text(encoding="utf-8"))
+            if not isinstance(raw, dict) or not all(
+                isinstance(k, str) and isinstance(v, str) for k, v in raw.items()
+            ):
+                raise ValueError("MCP_AUTH_CLIENTS_FILE must hold a JSON object of name to key")
+            self.auth_clients = raw
+        short = sorted(name for name, key in self.auth_clients.items() if len(key) < 32)
+        if short:
+            names = ", ".join(short)
+            raise ValueError(f"machine client keys must be at least 32 characters: {names}")
         return self
 
     @model_validator(mode="after")
