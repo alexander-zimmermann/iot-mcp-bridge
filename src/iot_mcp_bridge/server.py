@@ -8,7 +8,7 @@ by clients.
 
 Each tool here is its LLM-facing docstring plus the call into ``tools/*``;
 logging and the per-tool outcome metric are one middleware, not one wrapper
-per tool.
+per tool, and the per-client tool allowlist is another one in front of it.
 
 The app is exposed via :func:`build_app` (uvicorn factory) so importing this
 module has no side effects — settings are only loaded when the app is built.
@@ -16,15 +16,17 @@ module has no side effects — settings are only loaded when the app is built.
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+import fnmatch
+from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
 from typing import Any
 
 import structlog
 from fastmcp import FastMCP
+from fastmcp.exceptions import ToolError
 from fastmcp.server.middleware import CallNext, Middleware, MiddlewareContext
-from fastmcp.tools.base import ToolResult
-from mcp.types import CallToolRequestParams
+from fastmcp.tools.base import Tool, ToolResult
+from mcp.types import CallToolRequestParams, ListToolsRequest
 from starlette.applications import Starlette
 from starlette.middleware import Middleware as StarletteMiddleware
 from starlette.requests import Request
@@ -60,6 +62,54 @@ def _record_tool_call(tool: str, outcome: str) -> None:
     metrics_module.get().tool_calls.labels(tool=tool, sub=_principal_sub(), outcome=outcome).inc()
 
 
+def _principal_client() -> tuple[str | None, bool]:
+    """The ``client_id`` AuthMiddleware bound and whether it is a machine client."""
+    ctx = structlog.contextvars.get_contextvars()
+    client_id = ctx.get("client_id")
+    return (str(client_id) if client_id else None), ctx.get("client_kind") == "machine"
+
+
+class ClientToolPolicy(Middleware):
+    """Expose to each client only the tools its allowlist names.
+
+    Keyed on the ``client_id`` AuthMiddleware bound: a machine client without
+    an entry gets nothing, a user client without one keeps everything. The
+    allowlist is the platform's ceiling for an agent; whatever the agent's
+    own harness restricts on top is its business. A denied call is counted
+    like any other outcome, so a misconfigured agent shows up in metrics
+    instead of failing quietly.
+    """
+
+    @staticmethod
+    def _allowed(tool: str) -> bool:
+        client_id, machine = _principal_client()
+        policy = _settings.auth_client_tools if _settings is not None else {}
+        patterns = policy.get(client_id) if client_id is not None else None
+        if patterns is None:
+            return not machine
+        return any(fnmatch.fnmatchcase(tool, pattern) for pattern in patterns)
+
+    async def on_list_tools(
+        self,
+        context: MiddlewareContext[ListToolsRequest],
+        call_next: CallNext[ListToolsRequest, Sequence[Tool]],
+    ) -> Sequence[Tool]:
+        tools = await call_next(context)
+        return [tool for tool in tools if self._allowed(tool.name)]
+
+    async def on_call_tool(
+        self,
+        context: MiddlewareContext[CallToolRequestParams],
+        call_next: CallNext[CallToolRequestParams, ToolResult],
+    ) -> ToolResult:
+        tool = context.message.name
+        if not self._allowed(tool):
+            _record_tool_call(tool, "denied")
+            log.info("tool_denied", tool=tool)
+            raise ToolError(f"tool_not_allowed: {tool}")
+        return await call_next(context)
+
+
 class ToolTelemetry(Middleware):
     """Log every tool call and count its outcome per tool and OIDC subject."""
 
@@ -79,7 +129,7 @@ class ToolTelemetry(Middleware):
         return result
 
 
-mcp: FastMCP = FastMCP("iot-mcp-bridge", middleware=[ToolTelemetry()])
+mcp: FastMCP = FastMCP("iot-mcp-bridge", middleware=[ClientToolPolicy(), ToolTelemetry()])
 
 
 @mcp.tool()
