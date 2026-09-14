@@ -59,7 +59,7 @@ behind high-level questions:
 | Tool                                          | What it does                                                                                                  |
 | --------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
 | `get_current_state(domain, identifier)`       | Last retained message for a domain (`knx`/`heating`/`dhw`/`solar`/`wallbox`) with freshness metadata.         |
-| `get_current_knx(room, function, name, …)`    | Current value per matching KNX group address — answers "which lights are on right now?".                      |
+| `get_current_knx(room, function, name, …)`    | Current value per matching KNX group address with its role (status / command / reading) — answers "which lights are on right now?". |
 | `subscribe_nats(subject, duration_seconds)`   | Tails an allowlisted NATS subject for a short bounded window.                                                  |
 
 **Wiki** (the house's human-written references in [Wiki.js](https://js.wiki/); requires `MCP_WIKIJS_URL` + `MCP_WIKIJS_TOKEN_FILE`)

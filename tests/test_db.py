@@ -116,7 +116,7 @@ async def test_lookup_runs_the_statement_whole_regardless_of_the_cap(settings: S
     await db.init_pool(settings.model_copy(update={"query_row_limit": 2}))
     try:
         rows = await db.lookup("t", "ga_catalog", "SELECT ga FROM ga_catalog ORDER BY ga")
-        assert len(rows) == 8  # every seeded group address, not the first two
+        assert len(rows) == 12  # every seeded group address, not the first two
     finally:
         await db.close_pool()
 

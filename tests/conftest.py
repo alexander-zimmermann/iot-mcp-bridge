@@ -161,7 +161,8 @@ def _seed(conn: psycopg.Connection) -> None:
     )
     conn.execute("SELECT create_hypertable('warp_meter', by_range('time'))")
 
-    # Catalog seed — 8 GAs covering the categories the tools filter on.
+    # Catalog seed — 12 GAs covering the categories the tools filter on; the
+    # kitchen light is one device with command and -Status datapoint pairs.
     conn.execute(
         """
         INSERT INTO ga_catalog (ga, name, room, function, dpt, description) VALUES
@@ -172,7 +173,11 @@ def _seed(conn: psycopg.Connection) -> None:
             ('1/2/4',  'Sensors.GF.LivingRoom.Humidity',   'LivingRoom', 'Climate',  '9.007', NULL),
             ('1/2/100','Lighting.GF.LivingRoom.Ceiling',   'LivingRoom', 'Lighting', '1.001', NULL),
             ('1/2/200','Security.GF.LivingRoom.Motion',    'LivingRoom', 'Motion',   '1.018', NULL),
-            ('1/2/300','General.Central.Presence',         NULL,         NULL,       '1.011', NULL)
+            ('1/2/300','General.Central.Presence',         NULL,         NULL,       '1.011', NULL),
+            ('1/3/0',  'Lighting.GF.Kitchen.Switch',       'Kitchen',    'Lighting', '1.001', NULL),
+            ('1/3/1',  'Lighting.GF.Kitchen.Switch-Status','Kitchen',    'Lighting', '1.011', NULL),
+            ('1/3/2',  'Lighting.GF.Kitchen.Dim-Absolute', 'Kitchen',    'Lighting', '5.001', NULL),
+            ('1/3/3',  'Lighting.GF.Kitchen.Dim-Status',   'Kitchen',    'Lighting', '5.001', NULL)
         """
     )
 

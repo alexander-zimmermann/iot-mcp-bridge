@@ -383,9 +383,16 @@ async def get_current_knx(
 
     Filters (all optional, AND-combined) resolve the relevant GAs via the
     catalog: ``room`` (exact), ``function`` (exact, e.g. ``"Beleuchtung"``),
-    ``name`` (substring, ``ILIKE``). ``only_active=True`` keeps only GAs whose
-    current value is "on" (boolean true or a number > 0). GAs with no retained
-    NATS message are omitted.
+    ``name`` (substring, ``ILIKE``). GAs with no retained NATS message are
+    omitted.
+
+    Every state carries its ``role``: ``status`` for a ``-Status`` datapoint,
+    ``command`` for the datapoint it reports on (``Ein/Aus`` next to
+    ``Ein/Aus-Status``, ``Dimmen-Absolut`` next to ``Dimmen-Status``), whose
+    retained value is the last order sent and not the device now, and
+    ``reading`` for everything else (sensors, meters, diagnostics).
+    ``only_active=True`` keeps only GAs whose current value is "on" (boolean
+    true or a number > 0) and that report a state, never a command.
     """
     where: list[sql.Composable] = []
     params: list[Any] = []
@@ -416,6 +423,7 @@ async def get_current_knx(
             "note": "no group addresses match the filter; check room/function/name first",
         }
 
+    roles = await _ga_roles([row["ga_name"] for row in catalog])
     by_ga = await _knx_last_values([row["ga"] for row in catalog])
     metrics_module.get().nats_fetches.labels(domain="knx", result="ok").inc()
 
@@ -425,7 +433,8 @@ async def get_current_knx(
         if current is None:
             continue  # never retained on NATS
         value, ts = current
-        if only_active and not _is_on(value):
+        role = roles[row["ga_name"]]
+        if only_active and (role == "command" or not _is_on(value)):
             continue
         states.append(
             {
@@ -433,6 +442,7 @@ async def get_current_knx(
                 "name": row["ga_name"],
                 "room": row["room"],
                 "function": row["function"],
+                "role": role,
                 "value": value,
                 "age_seconds": round(_age_seconds(ts), 1),
             }
@@ -442,8 +452,57 @@ async def get_current_knx(
         "count": len(states),
         "filter": filter_used,
         "states": states,
-        "note": "current value per GA from NATS (last message); GAs without one are omitted",
+        "note": (
+            "current value per GA from NATS (last message); GAs without one are omitted; "
+            "a command's value is the last order sent, the device's state is its -Status sibling"
+        ),
     }
+
+
+_STATUS_SUFFIX = "-Status"
+_ANOMALY_SUFFIX = "-Anomalie"
+_DEVICE_DATAPOINTS_SQL = "SELECT name FROM ga_catalog WHERE name LIKE ANY(%s)"
+
+
+async def _ga_roles(names: list[str]) -> dict[str, str]:
+    """Role per catalog name from the house convention ``Function.Device.Datapoint``.
+
+    A ``-Status`` datapoint is the state of its device; a sibling it reports on
+    (the same datapoint without the suffix, or one that extends it with a dash:
+    ``Dimmen-Absolut`` for ``Dimmen-Status``) is a command; everything else is a
+    reading. Siblings come from the whole catalog, not the caller's filter, so a
+    lone ``Dimmen-Absolut`` match still knows it is a command.
+    """
+    devices = {name.rpartition(".")[0] for name in names}
+    rows = await db.lookup(
+        "get_current_knx",
+        "ga_catalog",
+        _DEVICE_DATAPOINTS_SQL,
+        ([f"{device}.%" for device in devices],),
+    )
+    datapoints: dict[str, set[str]] = {device: set() for device in devices}
+    for row in rows:
+        device, _, datapoint = row["name"].rpartition(".")
+        if device in datapoints:
+            datapoints[device].add(datapoint)
+
+    roles: dict[str, str] = {}
+    for name in names:
+        device, _, datapoint = name.rpartition(".")
+        bases = [
+            point.removesuffix(_STATUS_SUFFIX)
+            for point in datapoints[device]
+            if point.endswith(_STATUS_SUFFIX)
+        ]
+        if datapoint.endswith(_STATUS_SUFFIX):
+            roles[name] = "status"
+        elif datapoint.endswith(_ANOMALY_SUFFIX):
+            roles[name] = "reading"
+        elif any(datapoint == base or datapoint.startswith(base + "-") for base in bases):
+            roles[name] = "command"
+        else:
+            roles[name] = "reading"
+    return roles
 
 
 async def _knx_last_values(gas: list[str]) -> dict[str, tuple[Any, datetime]]:
