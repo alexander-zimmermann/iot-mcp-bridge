@@ -324,7 +324,7 @@ async def test_get_current_knx_no_catalog_match(
 
 
 # Kitchen track (1/3/x): Switch + Switch-Status, Dim-Absolute + Dim-Status.
-_KITCHEN_ALL_OFF = {
+_KITCHEN_ALL_OFF: dict[str, dict[str, Any]] = {
     "knx.1.3.0": {"value": True},  # last order: on, days ago
     "knx.1.3.1": {"value": False},  # the device says: off
     "knx.1.3.2": {"value": 100},  # last order: 100 %
