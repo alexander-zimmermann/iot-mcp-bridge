@@ -505,7 +505,13 @@ async def get_current_knx(
 
     Filters (optional, AND-combined) resolve GAs via the catalog: ``room``
     (exact), ``function`` (exact, e.g. ``"Beleuchtung"``), ``name`` (substring).
-    ``only_active=True`` returns only GAs whose current value is "on".
+
+    Each state carries a ``role``: ``status`` (a ``-Status`` datapoint, the
+    device now), ``command`` (the datapoint it reports on, e.g. ``Ein/Aus`` or
+    ``Dimmen-Absolut``; its value is the last order sent, however old, not the
+    device now) or ``reading`` (sensors, meters, diagnostics). Answer "is it
+    on?" from ``status`` rows. ``only_active=True`` returns only GAs whose
+    current value is "on" and that are not commands.
     """
     return await live_tools.get_current_knx(
         room=room,

@@ -321,3 +321,69 @@ async def test_get_current_knx_no_catalog_match(
     out = await live.get_current_knx(room="Nonexistent")
     assert out["count"] == 0
     assert out["states"] == []
+
+
+# Kitchen track (1/3/x): Switch + Switch-Status, Dim-Absolute + Dim-Status.
+_KITCHEN_ALL_OFF: dict[str, dict[str, Any]] = {
+    "knx.1.3.0": {"value": True},  # last order: on, days ago
+    "knx.1.3.1": {"value": False},  # the device says: off
+    "knx.1.3.2": {"value": 100},  # last order: 100 %
+    "knx.1.3.3": {"value": 0},  # the device says: 0 %
+}
+
+
+def _patch_kitchen(monkeypatch: pytest.MonkeyPatch, values: dict[str, dict[str, Any]]) -> None:
+    _patch_last_msg(monkeypatch, {subject: _msg(subject, v) for subject, v in values.items()})
+
+
+async def test_get_current_knx_roles_from_status_siblings(
+    db_pool: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _patch_kitchen(monkeypatch, _KITCHEN_ALL_OFF)
+    out = await live.get_current_knx(room="Kitchen")
+    assert {s["name"].rsplit(".", 1)[1]: s["role"] for s in out["states"]} == {
+        "Switch": "command",
+        "Switch-Status": "status",
+        "Dim-Absolute": "command",
+        "Dim-Status": "status",
+    }
+
+
+async def test_get_current_knx_reading_without_status_sibling(
+    db_pool: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _patch_last_msg(monkeypatch, {"knx.1.2.0": _msg("knx.1.2.0", {"value": 21.5})})
+    out = await live.get_current_knx(room="Bedroom", function="Sensors")
+    assert out["states"][0]["role"] == "reading"
+
+
+async def test_get_current_knx_only_active_skips_stale_commands(
+    db_pool: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _patch_kitchen(monkeypatch, _KITCHEN_ALL_OFF)
+    out = await live.get_current_knx(room="Kitchen", only_active=True)
+    assert out["count"] == 0  # the orders say on, the device says off
+
+
+async def test_get_current_knx_only_active_reports_status_on(
+    db_pool: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _patch_kitchen(
+        monkeypatch, {**_KITCHEN_ALL_OFF, "knx.1.3.1": {"value": True}, "knx.1.3.3": {"value": 60}}
+    )
+    out = await live.get_current_knx(room="Kitchen", only_active=True)
+    assert [(s["ga"], s["role"], s["value"]) for s in out["states"]] == [
+        ("1/3/1", "status", True),
+        ("1/3/3", "status", 60),
+    ]
+
+
+async def test_get_current_knx_command_role_survives_a_narrow_filter(
+    db_pool: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The filter matches the command alone; its -Status sibling still decides the role.
+    _patch_kitchen(monkeypatch, _KITCHEN_ALL_OFF)
+    out = await live.get_current_knx(name="Dim-Absolute")
+    assert out["states"][0]["role"] == "command"
+    out = await live.get_current_knx(name="Dim-Absolute", only_active=True)
+    assert out["count"] == 0
