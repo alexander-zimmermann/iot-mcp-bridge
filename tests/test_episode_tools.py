@@ -1,39 +1,22 @@
-"""Tests for the verdict loop: listing the episodes the engine holds and
-attaching a binary verdict to one of them."""
+"""Tests for reading episodes: the review list, and the evidence bundle an
+explanation opens with."""
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
-
-import psycopg
 import pytest
-import pytest_asyncio
 
-from lares_mcp_bridge import db
-from lares_mcp_bridge.config import Settings
-from lares_mcp_bridge.tools import episodes
-
-
-@pytest_asyncio.fixture
-async def clean_verdicts(settings: Settings, db_pool: None) -> AsyncIterator[None]:
-    """Every test starts with no verdicts on the seeded episodes."""
-
-    def truncate() -> None:
-        conn = psycopg.connect(settings.db_dsn, autocommit=True)
-        try:
-            conn.execute("TRUNCATE TABLE episode_verdicts")
-        finally:
-            conn.close()
-
-    truncate()
-    yield
-    truncate()
+from lares_mcp_bridge.tools import episodes, verdicts
 
 
 async def _episode_id(fault: str, *, open_only: bool = False) -> int:
     result = await episodes.list_episodes(fault=fault, days=365)
     rows = [r for r in result["episodes"] if not open_only or r["ended_at"] is None]
     return int(rows[0]["episode_id"])
+
+
+async def _episode_id_of(subject: str) -> int:
+    result = await episodes.list_episodes(days=365)
+    return int(next(r for r in result["episodes"] if r["subject"] == subject)["episode_id"])
 
 
 async def test_list_episodes_resolves_subject_against_the_catalog(clean_verdicts: None) -> None:
@@ -61,43 +44,25 @@ async def test_list_episodes_filters_by_state_and_window(clean_verdicts: None) -
     assert recent["row_count"] == 2
 
 
-async def test_set_verdict_is_read_back_on_the_episode(clean_verdicts: None) -> None:
-    episode_id = await _episode_id("silence", open_only=True)
-
-    written = await episodes.set_episode_verdict(episode_id=episode_id, verdict="nonsense")
-    assert written["verdict"] == "nonsense"
-    assert written["episode_id"] == episode_id
-    assert written["fault"] == "silence"
-
+async def test_list_episodes_carries_the_newest_explanation(clean_verdicts: None) -> None:
+    """One line per episode saying what the platform already said about it —
+    the newest of the two explanations, so the escalation wins over the
+    appearance, and its run id is what a verdict is then given on."""
+    explained = await _episode_id("silence", open_only=True)
     listed = await episodes.list_episodes(days=365)
-    on_episode = next(r for r in listed["episodes"] if r["episode_id"] == episode_id)
-    assert on_episode["verdict"] == "nonsense"
-    assert on_episode["decided_at"] is not None
+    by_id = {r["episode_id"]: r for r in listed["episodes"]}
 
+    assert by_id[explained]["explanation_tldr"] == "Auch die Nachbarkanäle des Geräts schweigen."
+    assert by_id[explained]["explanation_run_id"] is not None
 
-async def test_second_verdict_overwrites_and_never_duplicates(
-    settings: Settings, clean_verdicts: None
-) -> None:
-    episode_id = await _episode_id("silence", open_only=True)
-
-    await episodes.set_episode_verdict(episode_id=episode_id, verdict="nonsense")
-    second = await episodes.set_episode_verdict(episode_id=episode_id, verdict="real")
-    assert second["verdict"] == "real"
-
-    conn = psycopg.connect(settings.db_dsn, autocommit=True)
-    try:
-        row = conn.execute(
-            "SELECT count(*) FROM episode_verdicts WHERE episode_id = %s", (episode_id,)
-        ).fetchone()
-    finally:
-        conn.close()
-    assert row is not None
-    assert row[0] == 1
+    unexplained = await _episode_id("constancy")
+    assert by_id[unexplained]["explanation_tldr"] is None
+    assert by_id[unexplained]["explanation_run_id"] is None
 
 
 async def test_list_episodes_can_narrow_to_the_unjudged_ones(clean_verdicts: None) -> None:
     episode_id = await _episode_id("silence", open_only=True)
-    await episodes.set_episode_verdict(episode_id=episode_id, verdict="real")
+    await verdicts.set_verdict(target="episode", verdict="real", episode_id=episode_id)
 
     unjudged = await episodes.list_episodes(days=365, only_unjudged=True)
     assert episode_id not in [r["episode_id"] for r in unjudged["episodes"]]
@@ -108,7 +73,7 @@ async def test_one_episode_reads_back_outside_the_default_window(clean_verdicts:
     """A verdict must be readable without guessing how wide the window has to
     be — the oldest seeded episode is 40 days back, far outside the default."""
     oldest = await _episode_id("constancy")
-    await episodes.set_episode_verdict(episode_id=oldest, verdict="real")
+    await verdicts.set_verdict(target="episode", verdict="real", episode_id=oldest)
 
     named = await episodes.list_episodes(episode_id=oldest)
     assert named["row_count"] == 1
@@ -123,30 +88,56 @@ async def test_invalid_window_and_state_are_refused(clean_verdicts: None) -> Non
         await episodes.list_episodes(state="offen")  # type: ignore[arg-type]
 
 
-async def test_unknown_verdict_names_the_valid_ones(clean_verdicts: None) -> None:
+async def test_get_episode_bundles_the_evidence_of_one_episode(clean_verdicts: None) -> None:
+    """One call carries the episode, what it did, the channel it was measured
+    on, that channel's neighbours, and what was already said about it."""
     episode_id = await _episode_id("silence", open_only=True)
-    with pytest.raises(ValueError, match="nonsense"):
-        await episodes.set_episode_verdict(episode_id=episode_id, verdict="maybe")
+    bundle = await episodes.get_episode(episode_id=episode_id)
+
+    assert bundle["episode"]["episode_id"] == episode_id
+    assert bundle["episode"]["fault"] == "silence"
+    assert bundle["episode"]["affected"] == "Lighting.1F.Bedroom.Ceiling"
+
+    # Chronological, so the trajectory reads forwards.
+    assert [e["kind"] for e in bundle["events"]] == ["appeared", "escalated"]
+    times = [o["time"] for o in bundle["observations"]]
+    assert times == sorted(times)
+    assert len(times) == 5
+    assert bundle["observations"][-1]["score"] == pytest.approx(9.5)
+    assert bundle["observations_truncated"] is False
+
+    assert bundle["channel"]["ga"] == "1/2/2"
+    assert bundle["channel"]["dpt"] == "1.001"
+    # Same room, the channel itself excluded.
+    assert {s["ga"] for s in bundle["siblings"]} == {"1/2/0", "1/2/1"}
+
+    assert bundle["explanation"]["tldr"] == "Auch die Nachbarkanäle des Geräts schweigen."
+    assert bundle["explanation"]["text"].startswith("Seit der Eskalation")
+    assert bundle["explanation"]["run_id"] is not None
 
 
-async def test_verdict_on_an_unknown_episode_is_a_precise_error(clean_verdicts: None) -> None:
-    with pytest.raises(ValueError, match="999999"):
-        await episodes.set_episode_verdict(episode_id=999999, verdict="real")
+async def test_get_episode_carries_the_verdict_it_already_has(clean_verdicts: None) -> None:
+    episode_id = await _episode_id("silence", open_only=True)
+    await verdicts.set_verdict(target="episode", verdict="nonsense", episode_id=episode_id)
+
+    bundle = await episodes.get_episode(episode_id=episode_id)
+    assert bundle["episode"]["verdict"] == "nonsense"
 
 
-async def test_read_only_server_serves_reads_and_refuses_verdicts(settings: Settings) -> None:
-    """Without write credentials the server keeps querying and says plainly
-    why it cannot record a verdict — a missing secret must not take the read
-    tools down with it."""
-    read_only = settings.model_copy(update={"db_write_username": "", "db_write_password": ""})
-    await db.init_pool(read_only)
-    assert await db.init_write_pool(read_only) is None
-    try:
-        listed = await episodes.list_episodes(days=365)
-        assert listed["row_count"] > 0
-        with pytest.raises(RuntimeError, match="MCP_DB_WRITE_USERNAME"):
-            await episodes.set_episode_verdict(
-                episode_id=listed["episodes"][0]["episode_id"], verdict="real"
-            )
-    finally:
-        await db.close_pool()
+async def test_get_episode_without_a_group_address_still_bundles(clean_verdicts: None) -> None:
+    """A subject that names no channel has no catalog entry and no
+    neighbours — an empty bundle, not an error."""
+    boiler = await _episode_id_of("ems boiler")
+    bundle = await episodes.get_episode(episode_id=boiler)
+
+    assert bundle["episode"]["subject"] == "ems boiler"
+    assert bundle["channel"] is None
+    assert bundle["siblings"] == []
+    assert bundle["events"] == []
+    assert bundle["observations"] == []
+    assert bundle["explanation"] is None
+
+
+async def test_get_episode_on_an_unknown_id_is_a_precise_error(clean_verdicts: None) -> None:
+    with pytest.raises(ValueError, match="unknown_episode: 999999"):
+        await episodes.get_episode(episode_id=999999)

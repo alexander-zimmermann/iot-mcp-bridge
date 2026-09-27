@@ -13,6 +13,10 @@ reads that must come back whole (catalog, validation lists, one row by key)
 and runs its statement verbatim. Neither hands the tool a connection, a
 metric label or the +1 trick. Statements are always placeholder-parsed, so a
 literal ``%`` is written ``%%``.
+
+The caps a tool's own arguments get clamped to live here too, beside the row
+limit they belong with: ``window_days()`` for the day window every list tool
+takes.
 """
 
 from __future__ import annotations
@@ -51,6 +55,18 @@ Statement = LiteralString | sql.SQL | sql.Composed
 # (a sum over a partial result is silently wrong), event-log tools keep the
 # first ``limit`` rows and say so (newest-first stays meaningful).
 Overflow = Literal["error", "truncate"]
+
+
+# Five years is past every retention policy in the database; a wider window
+# is a typo, not a question.
+_MAX_WINDOW_DAYS = 365 * 5
+
+
+def window_days(days: int) -> int:
+    """Validate a day window and clamp it to the widest one worth asking for."""
+    if days <= 0:
+        raise ValueError(f"invalid_days: {days}")
+    return min(days, _MAX_WINDOW_DAYS)
 
 
 @dataclass(frozen=True)

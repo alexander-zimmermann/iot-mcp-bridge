@@ -36,7 +36,9 @@ EXPECTED_TOOLS = {
     "subscribe_nats",
     "get_current_knx",
     "list_episodes",
-    "set_episode_verdict",
+    "get_episode",
+    "list_runs",
+    "set_verdict",
     "search_wiki",
     "get_wiki_page",
     "list_wiki_pages",
@@ -105,6 +107,33 @@ async def test_tool_call_roundtrip(db_pool: None) -> None:
     assert {"knx", "ems_esp"} <= names
 
 
+async def test_episode_bundle_and_ledger_survive_the_mcp_layer(clean_verdicts: None) -> None:
+    """Through the real client, not the function: the bundle and the ledger
+    carry a NUMERIC cost, an INTERVAL duration and a text array, and every one
+    of them has to reach the caller as a plain JSON value."""
+    async with Client(server.mcp) as client:
+        listed = await client.call_tool("list_episodes", {"days": 365})
+        episode_id = listed.data["episodes"][0]["episode_id"]
+
+        bundle = await client.call_tool("get_episode", {"episode_id": episode_id})
+        assert bundle.data["episode"]["episode_id"] == episode_id
+        assert isinstance(bundle.data["observations"], list)
+
+        runs = await client.call_tool("list_runs", {"days": 30})
+        newest = runs.data["runs"][0]
+        assert isinstance(newest["cost"], float)
+        assert isinstance(newest["duration_seconds"], float)
+        assert isinstance(newest["output_ref"], list)
+
+        judged = await client.call_tool(
+            "set_verdict", {"target": "run", "verdict": "helpful", "run_id": newest["run_id"]}
+        )
+        assert judged.data["verdict"] == "helpful"
+
+        with pytest.raises(ToolError, match="unknown_episode"):
+            await client.call_tool("get_episode", {"episode_id": 999999})
+
+
 async def test_literal_parameters_reach_the_client_as_enums() -> None:
     """The LLM sees the allowed values instead of guessing at a free string."""
     async with Client(server.mcp) as client:
@@ -113,6 +142,10 @@ async def test_literal_parameters_reach_the_client_as_enums() -> None:
     assert aggregation["enum"] == ["avg", "sum", "min", "max", "count"]
     state = by_name["list_episodes"].input_schema["properties"]["state"]
     assert state["enum"] == ["all", "open", "ended"]
+    target = by_name["set_verdict"].input_schema["properties"]["target"]
+    assert target["enum"] == ["episode", "run"]
+    verdict = by_name["set_verdict"].input_schema["properties"]["verdict"]
+    assert verdict["enum"] == ["real", "nonsense", "helpful", "useless"]
 
 
 async def test_middleware_counts_every_tool_outcome(db_pool: None) -> None:
