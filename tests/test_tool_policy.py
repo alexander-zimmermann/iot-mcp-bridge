@@ -13,7 +13,7 @@ from lares_mcp_bridge import metrics as metrics_module
 from lares_mcp_bridge import server
 from lares_mcp_bridge.config import Settings
 
-ALLOWLIST = {"lares-agent": ["list_episodes", "query_*"]}
+ALLOWLIST = {"lares-agent": ["list_*", "get_*", "query_*"]}
 
 
 @pytest.fixture
@@ -53,9 +53,10 @@ async def test_machine_client_sees_only_its_allowlist(
     everything = await _visible_tools()
     structlog.contextvars.clear_contextvars()
     visible = await _visible_tools(client_id="lares-agent", client_kind="machine")
-    expected = {"list_episodes"} | {name for name in everything if name.startswith("query_")}
+    expected = {name for name in everything if name.startswith(("list_", "get_", "query_"))}
     assert visible == expected
-    assert "set_episode_verdict" not in visible
+    # The verdict is the owner's act and matches no pattern an agent holds.
+    assert "set_verdict" not in visible
 
 
 async def test_machine_client_without_entry_sees_nothing(
@@ -68,13 +69,13 @@ async def test_user_client_without_entry_keeps_every_tool(
     policy_settings: Settings, clean_context: None
 ) -> None:
     visible = await _visible_tools(client_id="lares-mcp-bridge", client_kind="user")
-    assert "set_episode_verdict" in visible
+    assert "set_verdict" in visible
     assert "list_episodes" in visible
 
 
 async def test_anonymous_keeps_every_tool(policy_settings: Settings, clean_context: None) -> None:
     visible = await _visible_tools()
-    assert "set_episode_verdict" in visible
+    assert "set_verdict" in visible
 
 
 async def test_denied_call_is_refused_and_counted(
@@ -85,10 +86,12 @@ async def test_denied_call_is_refused_and_counted(
         sub="lares-agent", client_id="lares-agent", client_kind="machine"
     )
     async with Client(server.mcp) as client:
-        with pytest.raises(ToolError, match="tool_not_allowed: set_episode_verdict"):
-            await client.call_tool("set_episode_verdict", {"episode_id": 1, "verdict": "real"})
+        with pytest.raises(ToolError, match="tool_not_allowed: set_verdict"):
+            await client.call_tool(
+                "set_verdict", {"target": "episode", "episode_id": 1, "verdict": "real"}
+            )
     denied = metrics_module.get().registry.get_sample_value(
         "lares_mcp_bridge_tool_calls_total",
-        {"tool": "set_episode_verdict", "sub": "lares-agent", "outcome": "denied"},
+        {"tool": "set_verdict", "sub": "lares-agent", "outcome": "denied"},
     )
     assert denied == 1

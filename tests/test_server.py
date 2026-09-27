@@ -36,7 +36,9 @@ EXPECTED_TOOLS = {
     "subscribe_nats",
     "get_current_knx",
     "list_episodes",
-    "set_episode_verdict",
+    "get_episode",
+    "list_runs",
+    "set_verdict",
     "search_wiki",
     "get_wiki_page",
     "list_wiki_pages",
@@ -113,6 +115,10 @@ async def test_literal_parameters_reach_the_client_as_enums() -> None:
     assert aggregation["enum"] == ["avg", "sum", "min", "max", "count"]
     state = by_name["list_episodes"].input_schema["properties"]["state"]
     assert state["enum"] == ["all", "open", "ended"]
+    target = by_name["set_verdict"].input_schema["properties"]["target"]
+    assert target["enum"] == ["episode", "run"]
+    verdict = by_name["set_verdict"].input_schema["properties"]["verdict"]
+    assert verdict["enum"] == ["real", "nonsense", "helpful", "useless"]
 
 
 async def test_middleware_counts_every_tool_outcome(db_pool: None) -> None:

@@ -14,7 +14,7 @@ Modern homes generate a lot of telemetry — KNX writes, smart-meter readings, h
 
 - **Discoverable** — the LLM can list data sources and inspect schemas, including a sample of JSONB keys for raw payloads.
 - **Aggregation-aware** — when a query asks for hourly buckets or coarser, the server transparently routes to a TimescaleDB continuous aggregate, returning fewer rows and faster responses.
-- **Read-only by construction, with one exception** — the query tools connect with a Postgres role that has `SELECT` privileges only, and there is no `execute_sql` tool. The single write is `set_episode_verdict`, which goes through a separate pool and a role that may write exactly one table (`episode_verdicts`) and reads only the episode it is judging. Leave the write credentials unset and the server is read-only outright.
+- **Read-only by construction, with one exception** — the query tools connect with a Postgres role that has `SELECT` privileges only, and there is no `execute_sql` tool. The single write is `set_verdict`, which goes through a separate pool and a role whose whole privilege is one table (`episode_verdicts`) plus two columns of the ledger (`agent_runs.verdict`, `agent_runs.verdict_at`). Leave the write credentials unset and the server is read-only outright.
 - **Result-bounded** — every tool caps its output. The LLM cannot accidentally pull a year of 5-second sensor data into its context window.
 - **Pluggable** — the data source is just Postgres + TimescaleDB. There is nothing homelab-specific in the server itself; the schema discovery works on any TimescaleDB instance.
 
@@ -49,12 +49,14 @@ behind high-level questions:
 | ----------------------------------------------- | -------------------------------------------------------------------------------------------------- |
 | `get_forecast(metric, horizon_hours, model)`    | Stored model forecasts (PV via Forecast.Solar, seasonal via statsforecast).                        |
 
-**Verdicts** (the review loop over the situations [lares-diagnostics-engine](https://github.com/alexander-zimmermann/lares-diagnostics-engine) recorded)
+**Verdicts** (the review loop over the situations [lares-diagnostics-engine](https://github.com/alexander-zimmermann/lares-diagnostics-engine) recorded and the runs the agent platform made)
 
 | Tool                                              | What it does                                                                                                                                 |
 | ------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| `list_episodes(state, fault, days, …)`            | The situations the detection chain folded from repeated observations, newest first, each with the verdict it carries. `only_unjudged=True` is what still needs judging. |
-| `set_episode_verdict(episode_id, verdict)`        | Records `"real"` or `"nonsense"` on one episode; setting it again overwrites. Requires the write credentials below. Nothing acts on a verdict automatically — they are counted per fault on the dashboard, and thresholds stay a human decision. |
+| `list_episodes(state, fault, days, …)`            | The situations the detection chain folded from repeated observations, newest first, each with the verdict it carries and the newest explanation of it. `only_unjudged=True` is what still needs judging. |
+| `get_episode(episode_id)`                         | One episode whole: the row, its events and observations, the catalog entry of its channel, the sibling channels of the same room, and the newest explanation. One call in place of three — what an explanation opens with. |
+| `list_runs(use_case, subject_kind, status, days, …)` | The ledger: one row per run of every use case, with what it produced, what it cost and the verdict it carries. A run named by `run_id` comes back with its full output text. |
+| `set_verdict(target, verdict, …)`                 | Records `"real"`/`"nonsense"` on an episode or `"helpful"`/`"useless"` on a run; setting it again overwrites. A run is named by `run_id`, by `subject_kind` + `subject_key` (the newest run on that subject), or by nothing (the newest messenger run). Requires the write credentials below. Nothing acts on a verdict automatically — they are counted per fault and per use case on the dashboard, and thresholds stay a human decision. |
 
 **Live** (current state straight from NATS JetStream; requires `MCP_NATS_ENABLED=true`)
 
@@ -161,7 +163,7 @@ All settings are environment variables, prefixed with `MCP_`:
 
 When `MCP_AUTH_ENABLED=true`, every request must carry a valid OIDC Bearer token signed by the configured JWKS. Tested against [Authentik](https://goauthentik.io/) but works with any OIDC-compliant authorization server.
 
-An agent that cannot run an OAuth flow authenticates with a static API key instead: `MCP_AUTH_CLIENTS_FILE` points at a mounted Secret holding `{"<client name>": "<key>"}` (keys of at least 32 characters), sent as `Authorization: Bearer <key>`. Such a machine client sees only the tools its entry in `MCP_AUTH_CLIENT_TOOLS` names, for example `{"lares-agent": ["list_episodes", "query_*", "get_*", "resolve"]}`; a machine client without an entry sees no tools, a user without one keeps every tool. Denied calls are counted in the tool-call metric with outcome `denied`.
+An agent that cannot run an OAuth flow authenticates with a static API key instead: `MCP_AUTH_CLIENTS_FILE` points at a mounted Secret holding `{"<client name>": "<key>"}` (keys of at least 32 characters), sent as `Authorization: Bearer <key>`. Such a machine client sees only the tools its entry in `MCP_AUTH_CLIENT_TOOLS` names, for example `{"lares-agent": ["list_*", "get_*", "query_*", "correlate_events", "search_wiki"]}`; a machine client without an entry sees no tools, a user without one keeps every tool. Denied calls are counted in the tool-call metric with outcome `denied`.
 
 ### Operational endpoints
 

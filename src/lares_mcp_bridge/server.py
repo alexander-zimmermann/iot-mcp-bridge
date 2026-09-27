@@ -43,11 +43,15 @@ from .tools import domain as domain_tools
 from .tools import episodes as episode_tools
 from .tools import forecasts as forecasts_tools
 from .tools import live as live_tools
+from .tools import runs as run_tools
 from .tools import sources as sources_tools
 from .tools import timeseries as timeseries_tools
+from .tools import verdicts as verdict_tools
 from .tools import wiki as wiki_tools
 from .tools.episodes import EpisodeState
+from .tools.runs import RunStatus, SubjectKind
 from .tools.timeseries import Aggregation
+from .tools.verdicts import Verdict, VerdictTarget
 
 log = get_logger(__name__)
 
@@ -419,6 +423,11 @@ async def list_episodes(
     * ``severity`` in the result is the delivery contract 1 (info) / 2
       (warning) / 3 (critical); ``affected`` and ``room`` resolve the group
       address in the subject against the KNX catalog.
+    * ``explanation_tldr`` and ``explanation_run_id`` are the newest thing the
+      agent platform said about that episode; the run id is what a verdict on
+      the explanation is given on.
+
+    For the whole evidence of one episode, call ``get_episode`` instead.
     """
     return await episode_tools.list_episodes(
         state=state,
@@ -431,20 +440,99 @@ async def list_episodes(
 
 
 @mcp.tool()
-async def set_episode_verdict(episode_id: int, verdict: str) -> dict[str, Any]:
-    """Record whether one episode was ``"real"`` or ``"nonsense"``.
+async def get_episode(episode_id: int) -> dict[str, Any]:
+    """Everything one episode is, in one call — start here when explaining one.
 
-    ``episode_id`` comes from ``list_episodes``. The verdict belongs to that
-    one situation, never to the fault as a whole — a verdict on the fault
-    would be a mute switch wearing a different hat. Setting it again
-    overwrites the earlier one.
+    Returns ``episode`` (the row as ``list_episodes`` gives it, plus
+    ``channel_ga``), ``events`` (appeared / escalated / ended with their time
+    and severity), ``observations`` (the score curve, oldest first, the most
+    recent 200), ``channel`` (the KNX catalog entry of the group address in
+    the subject, or ``null``), ``siblings`` (the other catalog channels of the
+    same room) and ``explanation`` (the newest explanation of this episode:
+    ``run_id``, ``tldr``, ``text``, ``created_at``, or ``null``).
 
-    Nothing acts on this automatically: verdicts are counted per fault on the
-    "Vorfälle" dashboard, and thresholds stay a human decision informed by
-    those counts. The returned row names the fault and subject, so the
-    verdict can be confirmed against the episode it was meant for.
+    An unknown id errors with the id in the message. ``observations_truncated``
+    and ``siblings_truncated`` say when a list was cut to its cap.
     """
-    return await episode_tools.set_episode_verdict(episode_id=episode_id, verdict=verdict)
+    return await episode_tools.get_episode(episode_id=episode_id)
+
+
+@mcp.tool()
+async def list_runs(
+    run_id: int | None = None,
+    use_case: str | None = None,
+    subject_kind: SubjectKind | None = None,
+    subject_key: str | None = None,
+    status: RunStatus | None = None,
+    only_unjudged: bool = False,
+    days: int = 7,
+    limit: int = 100,
+) -> dict[str, Any]:
+    """Runs of the agent platform, newest first — the ledger.
+
+    One row per run of every use case, whatever started it: an episode event,
+    a schedule, a chat message or a hand. Each row carries what it produced
+    (``tldr``, ``output_ref``), what it cost (``tokens_in``, ``tokens_out``,
+    ``cost``, ``duration_seconds``) and the verdict it already has.
+
+    * ``run_id`` — read one run back by id, whatever its age; that read alone
+                   carries the full output ``text``
+    * ``use_case`` — exact name (e.g. ``"messenger"``, ``"explain-episode"``)
+    * ``subject_kind`` / ``subject_key`` — what the run was about; for an
+      explanation the kind is ``"episode"`` and the key names the episode
+    * ``status`` — ``queued`` | ``running`` | ``completed`` | ``failed`` | ``capped``
+    * ``only_unjudged=True`` — what still needs judging
+    * ``days`` — window in days on the run's creation
+    """
+    return await run_tools.list_runs(
+        run_id=run_id,
+        use_case=use_case,
+        subject_kind=subject_kind,
+        subject_key=subject_key,
+        status=status,
+        only_unjudged=only_unjudged,
+        days=days,
+        limit=limit,
+    )
+
+
+@mcp.tool()
+async def set_verdict(
+    target: VerdictTarget,
+    verdict: Verdict,
+    episode_id: int | None = None,
+    run_id: int | None = None,
+    subject_kind: SubjectKind | None = None,
+    subject_key: str | None = None,
+) -> dict[str, Any]:
+    """Record the owner's judgement on one episode or one run. Setting it
+    again overwrites the earlier one.
+
+    * ``target="episode"`` — was the detected situation ``"real"`` or
+      ``"nonsense"``? Name it with ``episode_id`` from ``list_episodes``. The
+      verdict belongs to that one situation, never to the fault as a whole —
+      a verdict on the fault would be a mute switch wearing a different hat.
+    * ``target="run"`` — was the platform's output ``"helpful"`` or
+      ``"useless"``? Name the run with ``run_id`` from ``list_runs``, or with
+      ``subject_kind`` and ``subject_key`` for the newest run on that subject
+      (``"episode"`` and the episode id for an explanation), or with neither
+      for the newest messenger run — the answer just given in this chat.
+
+    Nothing acts on this automatically: verdicts are counted per fault and per
+    use case on the "Vorfälle" dashboard, and thresholds stay a human decision
+    informed by those counts. The returned row names what was judged, so the
+    verdict can be confirmed against the thing it was meant for.
+
+    This is the owner's act. An agent never calls it.
+    """
+    return await verdict_tools.set_verdict(
+        target=target,
+        verdict=verdict,
+        episode_id=episode_id,
+        run_id=run_id,
+        subject_kind=subject_kind,
+        subject_key=subject_key,
+    )
 
 
 @mcp.tool()

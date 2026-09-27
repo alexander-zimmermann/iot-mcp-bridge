@@ -359,6 +359,185 @@ def _seed(conn: psycopg.Connection) -> None:
         """
     )
 
+    # The episode's trajectory and its notification events. Only the two
+    # `silence` episodes carry them, so a bundle with nothing underneath it
+    # stays testable on the `constancy` ones.
+    conn.execute(
+        """
+        CREATE TABLE episode_observations (
+            episode_id BIGINT           NOT NULL REFERENCES episodes (id),
+            time       TIMESTAMPTZ      NOT NULL,
+            score      DOUBLE PRECISION NOT NULL,
+            severity   SMALLINT         NOT NULL CHECK (severity BETWEEN 1 AND 3),
+            value      DOUBLE PRECISION,
+            PRIMARY KEY (episode_id, time)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE episode_events (
+            episode_id BIGINT      NOT NULL REFERENCES episodes (id),
+            kind       TEXT        NOT NULL CHECK (kind IN ('appeared', 'escalated', 'ended')),
+            time       TIMESTAMPTZ NOT NULL,
+            severity   SMALLINT    NOT NULL CHECK (severity BETWEEN 0 AND 3),
+            PRIMARY KEY (episode_id, kind)
+        )
+        """
+    )
+
+    # Five hourly observations on the open episode, the score climbing into
+    # the escalation, plus one on the ended one.
+    conn.execute(
+        """
+        INSERT INTO episode_observations (episode_id, time, score, severity, value)
+        SELECT e.id,
+               NOW() - ((5 - i) || ' hours')::interval,
+               2.0 + i * 1.875,
+               CASE WHEN i >= 2 THEN 3 ELSE 2 END,
+               21.5 + i
+        FROM episodes e, generate_series(0, 4) AS i
+        WHERE e.fault = 'silence' AND e.ended_at IS NULL
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO episode_observations (episode_id, time, score, severity, value)
+        SELECT e.id, e.started_at, e.peak_score, e.severity, 19.0
+        FROM episodes e
+        WHERE e.fault = 'silence' AND e.subject = 'knx [1/2/3]'
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO episode_events (episode_id, kind, time, severity)
+        SELECT e.id, 'appeared', e.started_at, 2
+        FROM episodes e WHERE e.fault = 'silence' AND e.ended_at IS NULL
+        UNION ALL
+        SELECT e.id, 'escalated', NOW() - INTERVAL '3 hours', 3
+        FROM episodes e WHERE e.fault = 'silence' AND e.ended_at IS NULL
+        UNION ALL
+        SELECT e.id, 'appeared', e.started_at, 1
+        FROM episodes e WHERE e.fault = 'silence' AND e.subject = 'knx [1/2/3]'
+        UNION ALL
+        SELECT e.id, 'ended', e.ended_at, 0
+        FROM episodes e WHERE e.fault = 'silence' AND e.subject = 'knx [1/2/3]'
+        """
+    )
+
+    # Ledger and memory — the platform's run table, written by the trigger
+    # service, read here and column-updated by the verdict role.
+    conn.execute(
+        """
+        CREATE TABLE agent_runs (
+            id             BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+            use_case       TEXT           NOT NULL,
+            trigger        TEXT           NOT NULL
+                CHECK (trigger IN ('event', 'schedule', 'message', 'manual')),
+            subject_kind   TEXT           NOT NULL
+                CHECK (subject_kind IN ('episode', 'alert_group', 'chat', 'none')),
+            subject_key    TEXT,
+            session_id     TEXT,
+            harness_run_id TEXT,
+            status         TEXT           NOT NULL
+                CHECK (status IN ('queued', 'running', 'completed', 'failed', 'capped')),
+            attempt        SMALLINT       NOT NULL DEFAULT 1,
+            error          TEXT,
+            tldr           TEXT,
+            text           TEXT,
+            language       TEXT,
+            output_ref     TEXT[]         NOT NULL DEFAULT '{}',
+            output_state   TEXT[]         NOT NULL DEFAULT '{}',
+            model_source   TEXT,
+            model          TEXT,
+            tokens_in      INTEGER,
+            tokens_out     INTEGER,
+            cost           NUMERIC(10, 6),
+            duration       INTERVAL,
+            tool_trace     JSONB,
+            verdict        TEXT           CHECK (verdict IN ('helpful', 'useless')),
+            verdict_at     TIMESTAMPTZ,
+            created_at     TIMESTAMPTZ    NOT NULL DEFAULT now(),
+            finished_at    TIMESTAMPTZ,
+            CONSTRAINT agent_runs_output_positions
+                CHECK (cardinality(output_ref) = cardinality(output_state)),
+            CONSTRAINT agent_runs_output_state_values
+                CHECK (array_remove(output_state, NULL) <@ ARRAY['open', 'merged', 'closed'])
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE UNIQUE INDEX agent_runs_subject_idx
+            ON agent_runs (use_case, subject_kind, subject_key)
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE agent_memory (
+            use_case   TEXT        PRIMARY KEY,
+            text       TEXT        NOT NULL,
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        )
+        """
+    )
+
+    # Ledger seed — two explanations of the open episode (one per event
+    # kind, which is what makes the subject key carry the kind), two
+    # messenger turns so "the newest" has something to beat, and one failed
+    # scheduled run outside the default window.
+    conn.execute(
+        """
+        INSERT INTO agent_runs (use_case, trigger, subject_kind, subject_key, session_id,
+                                status, tldr, text, language, output_ref, output_state,
+                                model_source, model, tokens_in, tokens_out, cost, duration,
+                                created_at, finished_at)
+        SELECT 'explain-episode', 'event', 'episode', e.id || ':appeared', NULL,
+               'completed', 'Deckenlicht meldet seit vier Stunden nichts.',
+               'Das Deckenlicht im Schlafzimmer hat zuletzt um 09:12 gesendet.',
+               'de', ARRAY['discord:1'], ARRAY[NULL]::text[],
+               'codex', 'gpt-5.5', 4200, 310, 0.021000, INTERVAL '42 seconds',
+               NOW() - INTERVAL '4 hours', NOW() - INTERVAL '4 hours'
+        FROM episodes e WHERE e.fault = 'silence' AND e.ended_at IS NULL
+        UNION ALL
+        SELECT 'explain-episode', 'event', 'episode', e.id || ':escalated', NULL,
+               'completed', 'Auch die Nachbarkanäle des Geräts schweigen.',
+               'Seit der Eskalation sendet kein Kanal des Geräts mehr.',
+               'de', ARRAY['discord:2'], ARRAY[NULL]::text[],
+               'codex', 'gpt-5.5', 5100, 280, 0.024000, INTERVAL '51 seconds',
+               NOW() - INTERVAL '2 hours', NOW() - INTERVAL '2 hours'
+        FROM episodes e WHERE e.fault = 'silence' AND e.ended_at IS NULL
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO agent_runs (use_case, trigger, subject_kind, subject_key, session_id,
+                                status, error, tldr, text, language, model_source, model,
+                                tokens_in, tokens_out, cost, duration, created_at, finished_at)
+        VALUES
+            ('messenger', 'message', 'chat', 'session-a:1', 'session-a',
+             'completed', NULL, 'Heute Nacht war nichts los.',
+             'Keine Episode zwischen 22 und 07 Uhr.',
+             'de', 'codex', 'gpt-5.5', 1900, 120, 0.009000, INTERVAL '8 seconds',
+             NOW() - INTERVAL '3 hours', NOW() - INTERVAL '3 hours'),
+            ('messenger', 'message', 'chat', 'session-a:2', 'session-a',
+             'completed', NULL, 'Die Wallbox lädt mit 6,1 kW.',
+             'Die Wallbox lädt seit 14:02 mit 6,1 kW.',
+             'de', 'codex', 'gpt-5.5', 2100, 140, 0.010000, INTERVAL '9 seconds',
+             NOW() - INTERVAL '30 minutes', NOW() - INTERVAL '30 minutes'),
+            ('propose-faults', 'schedule', 'none', NULL, NULL,
+             'failed', 'model source unreachable', NULL, NULL, 'en', 'codex', 'gpt-5.5',
+             NULL, NULL, NULL, NULL,
+             NOW() - INTERVAL '10 days', NOW() - INTERVAL '10 days')
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO agent_memory (use_case, text)
+        VALUES ('messenger', 'Der Besitzer fragt meist nach der Wallbox.')
+        """
+    )
+
 
 # LiteralString so the tuple elements stay assignable to psycopg's Query type.
 _CAGGS: list[tuple[LiteralString, LiteralString]] = [
@@ -445,3 +624,20 @@ async def db_pool(settings: Settings) -> AsyncIterator[None]:
         yield
     finally:
         await db.close_pool()
+
+
+@pytest_asyncio.fixture
+async def clean_verdicts(settings: Settings, db_pool: None) -> AsyncIterator[None]:
+    """Every test starts with no verdict on any episode and none on any run."""
+
+    def reset() -> None:
+        conn = psycopg.connect(settings.db_dsn, autocommit=True)
+        try:
+            conn.execute("TRUNCATE TABLE episode_verdicts")
+            conn.execute("UPDATE agent_runs SET verdict = NULL, verdict_at = NULL")
+        finally:
+            conn.close()
+
+    reset()
+    yield
+    reset()
