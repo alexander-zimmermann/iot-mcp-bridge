@@ -107,6 +107,33 @@ async def test_tool_call_roundtrip(db_pool: None) -> None:
     assert {"knx", "ems_esp"} <= names
 
 
+async def test_episode_bundle_and_ledger_survive_the_mcp_layer(clean_verdicts: None) -> None:
+    """Through the real client, not the function: the bundle and the ledger
+    carry a NUMERIC cost, an INTERVAL duration and a text array, and every one
+    of them has to reach the caller as a plain JSON value."""
+    async with Client(server.mcp) as client:
+        listed = await client.call_tool("list_episodes", {"days": 365})
+        episode_id = listed.data["episodes"][0]["episode_id"]
+
+        bundle = await client.call_tool("get_episode", {"episode_id": episode_id})
+        assert bundle.data["episode"]["episode_id"] == episode_id
+        assert isinstance(bundle.data["observations"], list)
+
+        runs = await client.call_tool("list_runs", {"days": 30})
+        newest = runs.data["runs"][0]
+        assert isinstance(newest["cost"], float)
+        assert isinstance(newest["duration_seconds"], float)
+        assert isinstance(newest["output_ref"], list)
+
+        judged = await client.call_tool(
+            "set_verdict", {"target": "run", "verdict": "helpful", "run_id": newest["run_id"]}
+        )
+        assert judged.data["verdict"] == "helpful"
+
+        with pytest.raises(ToolError, match="unknown_episode"):
+            await client.call_tool("get_episode", {"episode_id": 999999})
+
+
 async def test_literal_parameters_reach_the_client_as_enums() -> None:
     """The LLM sees the allowed values instead of guessing at a free string."""
     async with Client(server.mcp) as client:
