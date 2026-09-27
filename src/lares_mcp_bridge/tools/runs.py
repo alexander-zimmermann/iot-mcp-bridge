@@ -9,6 +9,9 @@ three.
 The list is the browsing read and deliberately leaves the output text out: a
 week of explanations would cost more tokens than the question is worth. A run
 named by its id comes back whole, because judging an output means reading it.
+
+This module owns the ledger's vocabulary — the subject kinds, the statuses
+and the shape of a subject key — for every other module that reads the table.
 Verdicts are written in :mod:`.verdicts`; nothing here writes.
 """
 
@@ -23,7 +26,11 @@ from .. import db
 SubjectKind = Literal["episode", "alert_group", "chat", "none"]
 RunStatus = Literal["queued", "running", "completed", "failed", "capped"]
 
-_MAX_WINDOW_DAYS = 365 * 5
+# A run's subject key is the subject itself, or the subject and the event kind
+# behind a colon: the trigger's dedupe key is one run per episode event, so the
+# key has to tell `appeared` from `escalated` on the same episode. Either shape
+# is found by the subject alone. Bind the key expression twice.
+SUBJECT_KEY_MATCH = sql.SQL("(r.subject_key = {key} OR split_part(r.subject_key, ':', 1) = {key})")
 
 # Cost is NUMERIC and duration an INTERVAL; both are cast here so the result
 # carries plain numbers a model can compare without parsing anything.
@@ -38,6 +45,13 @@ _RUN_COLUMNS = sql.SQL(
     r.verdict, r.verdict_at, r.created_at, r.finished_at
     """
 )
+
+
+def require_subject_kind(subject_kind: str) -> None:
+    """Refuse a subject kind the ledger has no rows for, naming the ones it has."""
+    if subject_kind not in get_args(SubjectKind):
+        kinds = ", ".join(get_args(SubjectKind))
+        raise ValueError(f"invalid_subject_kind: {subject_kind!r}; must be one of {kinds}")
 
 
 async def list_runs(
@@ -56,15 +70,12 @@ async def list_runs(
     Pass ``run_id`` to read one run back regardless of how old it is; that
     read alone carries the output ``text``.
     """
-    if subject_kind is not None and subject_kind not in get_args(SubjectKind):
-        kinds = ", ".join(get_args(SubjectKind))
-        raise ValueError(f"invalid_subject_kind: {subject_kind!r}; must be one of {kinds}")
+    if subject_kind is not None:
+        require_subject_kind(subject_kind)
     if status is not None and status not in get_args(RunStatus):
         statuses = ", ".join(get_args(RunStatus))
         raise ValueError(f"invalid_status: {status!r}; must be one of {statuses}")
-    if days <= 0:
-        raise ValueError(f"invalid_days: {days}")
-    days = min(days, _MAX_WINDOW_DAYS)
+    days = db.window_days(days)
 
     where_parts: list[sql.Composable] = []
     params: list[Any] = []

@@ -514,9 +514,9 @@ async def set_verdict(
       a verdict on the fault would be a mute switch wearing a different hat.
     * ``target="run"`` — was the platform's output ``"helpful"`` or
       ``"useless"``? Name the run with ``run_id`` from ``list_runs``, or with
-      ``subject_kind`` and ``subject_key`` for the newest run on that subject
-      (``"episode"`` and the episode id for an explanation), or with neither
-      for the newest messenger run — the answer just given in this chat.
+      ``subject_kind`` and ``subject_key`` together for the newest run on that
+      subject (``"episode"`` and the episode id for an explanation), or with
+      neither for the newest messenger run — the answer just given in this chat.
 
     Nothing acts on this automatically: verdicts are counted per fault and per
     use case on the "Vorfälle" dashboard, and thresholds stay a human decision

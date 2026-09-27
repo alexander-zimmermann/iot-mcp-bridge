@@ -146,6 +146,11 @@ async def test_an_ambiguous_or_missing_address_is_refused(clean_verdicts: None) 
         await verdicts.set_verdict(target="run", verdict="helpful", run_id=1, subject_kind="chat")
     with pytest.raises(ValueError, match="episode_id"):
         await verdicts.set_verdict(target="run", verdict="helpful", episode_id=episode_id)
+    # A subject is a kind and a key together; half of one names nothing.
+    with pytest.raises(ValueError, match="incomplete_subject_address"):
+        await verdicts.set_verdict(target="run", verdict="helpful", subject_kind="chat")
+    with pytest.raises(ValueError, match="incomplete_subject_address"):
+        await verdicts.set_verdict(target="run", verdict="helpful", subject_key="session-a:2")
 
 
 async def test_read_only_server_serves_reads_and_refuses_both_verdicts(

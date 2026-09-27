@@ -21,10 +21,12 @@ the two verdict columns of the ledger and nothing else.
 
 from __future__ import annotations
 
-from typing import Any, Literal, LiteralString, get_args
+from typing import Any, Literal, get_args
+
+from psycopg import sql
 
 from .. import db
-from .runs import SubjectKind
+from .runs import SUBJECT_KEY_MATCH, SubjectKind, require_subject_kind
 
 VerdictTarget = Literal["episode", "run"]
 Verdict = Literal["real", "nonsense", "helpful", "useless"]
@@ -38,15 +40,10 @@ _VERDICTS: dict[str, tuple[str, ...]] = {
 
 # What "that was helpful" means when nothing else is named: the chat the
 # owner is holding at that moment.
-MESSENGER_USE_CASE = "messenger"
+_MESSENGER_USE_CASE = "messenger"
 
-# A run's subject key is the subject itself, or the subject and the event
-# kind behind a colon — one explanation per episode event means the key has
-# to distinguish them. Either shape is addressable by the subject alone.
-_SUBJECT_MATCH: LiteralString = "(subject_key = %s OR split_part(subject_key, ':', 1) = %s)"
-
-_RUN_IDENTITY: LiteralString = (
-    "SELECT id AS run_id, use_case, subject_kind, subject_key FROM agent_runs"
+_RUN_IDENTITY = sql.SQL(
+    "SELECT r.id AS run_id, r.use_case, r.subject_kind, r.subject_key FROM agent_runs r"
 )
 
 
@@ -62,9 +59,9 @@ async def set_verdict(
     """Record ``verdict`` on one episode or one run, overwriting any earlier one.
 
     An episode is named by ``episode_id``. A run is named by ``run_id``, or
-    by ``subject_kind`` and ``subject_key`` for the newest run on that
-    subject, or by nothing at all for the newest run of the messenger — the
-    answer just given in the chat.
+    by ``subject_kind`` and ``subject_key`` together for the newest run on
+    that subject, or by nothing at all for the newest run of the messenger —
+    the answer just given in the chat.
     """
     if target not in get_args(VerdictTarget):
         raise ValueError(
@@ -128,7 +125,11 @@ async def _judge_run(
     subject_kind: SubjectKind | None,
     subject_key: str | None,
 ) -> dict[str, Any]:
-    """Two columns on the ledger row, so a second thought replaces the first."""
+    """Two columns on the ledger row, so a second thought replaces the first.
+
+    The UPDATE touches nothing but those two, which is exactly the column
+    grant the verdict role holds: a judgement can never rewrite what it judges.
+    """
     run = await _resolve_run(run_id=run_id, subject_kind=subject_kind, subject_key=subject_key)
 
     written = await db.write(
@@ -146,52 +147,63 @@ async def _judge_run(
 async def _resolve_run(
     *, run_id: int | None, subject_kind: SubjectKind | None, subject_key: str | None
 ) -> dict[str, Any]:
-    """The run the three ways of naming one point at."""
+    """The run that the three ways of naming one point at."""
     if run_id is not None and (subject_kind is not None or subject_key is not None):
         raise ValueError(
             "ambiguous_run_address: name a run by run_id, or by subject_kind and subject_key,"
             " or by nothing for the newest messenger run"
         )
-    if subject_key is not None and subject_kind is None:
-        raise ValueError("missing_subject_kind: a subject_key needs the kind of subject it names")
-    if subject_kind is not None and subject_kind not in get_args(SubjectKind):
-        kinds = ", ".join(get_args(SubjectKind))
-        raise ValueError(f"invalid_subject_kind: {subject_kind!r}; must be one of {kinds}")
+    if (subject_kind is None) != (subject_key is None):
+        raise ValueError(
+            "incomplete_subject_address: subject_kind and subject_key name a subject together"
+        )
 
     if run_id is not None:
         found = await db.lookup(
-            "set_verdict", "agent_runs", f"{_RUN_IDENTITY} WHERE id = %s", (run_id,)
+            "set_verdict",
+            "agent_runs",
+            sql.SQL("{identity} WHERE r.id = {run_id}").format(
+                identity=_RUN_IDENTITY, run_id=sql.Placeholder()
+            ),
+            (run_id,),
         )
         if not found:
             raise ValueError(f"unknown_run: {run_id}; call list_runs to find a valid id")
         return found[0]
 
-    if subject_kind is not None:
-        where: LiteralString = "WHERE subject_kind = %s"
-        params: tuple[Any, ...] = (subject_kind,)
-        if subject_key is not None:
-            where += f" AND {_SUBJECT_MATCH}"
-            params += (subject_key, subject_key)
+    if subject_kind is not None and subject_key is not None:
+        require_subject_kind(subject_kind)
         found = await db.lookup(
             "set_verdict",
             "agent_runs",
-            f"{_RUN_IDENTITY} {where} ORDER BY created_at DESC LIMIT 1",
-            params,
+            sql.SQL(
+                "{identity} WHERE r.subject_kind = {kind} AND {key_match}"
+                " ORDER BY r.created_at DESC LIMIT 1"
+            ).format(
+                identity=_RUN_IDENTITY,
+                kind=sql.Placeholder(),
+                key_match=SUBJECT_KEY_MATCH.format(key=sql.Placeholder()),
+            ),
+            (subject_kind, subject_key, subject_key),
         )
         if not found:
-            named = f"{subject_kind}/{subject_key}" if subject_key else subject_kind
-            raise ValueError(f"no_run_on_subject: {named}; call list_runs to see which runs exist")
+            raise ValueError(
+                f"no_run_on_subject: {subject_kind}/{subject_key};"
+                " call list_runs to see which runs exist"
+            )
         return found[0]
 
     found = await db.lookup(
         "set_verdict",
         "agent_runs",
-        f"{_RUN_IDENTITY} WHERE use_case = %s ORDER BY created_at DESC LIMIT 1",
-        (MESSENGER_USE_CASE,),
+        sql.SQL(
+            "{identity} WHERE r.use_case = {use_case} ORDER BY r.created_at DESC LIMIT 1"
+        ).format(identity=_RUN_IDENTITY, use_case=sql.Placeholder()),
+        (_MESSENGER_USE_CASE,),
     )
     if not found:
         raise ValueError(
-            f"no_run_on_subject: {MESSENGER_USE_CASE}; there is no run to judge yet —"
+            f"no_run_on_subject: {_MESSENGER_USE_CASE}; there is no run to judge yet —"
             " name a run_id or a subject instead"
         )
     return found[0]

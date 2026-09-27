@@ -89,8 +89,8 @@ async def test_invalid_window_and_state_are_refused(clean_verdicts: None) -> Non
 
 
 async def test_get_episode_bundles_the_evidence_of_one_episode(clean_verdicts: None) -> None:
-    """One call in place of three: the episode, what it did, the channel it
-    was measured on, that channel's neighbours, and what was already said."""
+    """One call carries the episode, what it did, the channel it was measured
+    on, that channel's neighbours, and what was already said about it."""
     episode_id = await _episode_id("silence", open_only=True)
     bundle = await episodes.get_episode(episode_id=episode_id)
 

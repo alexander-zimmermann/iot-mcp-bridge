@@ -9,8 +9,8 @@ already explained" are one read.
 
 ``get_episode`` is the other half: everything an explanation needs about one
 episode in a single call — the row, its trajectory, the channel it was
-measured on, that channel's neighbours and the last explanation. Three reads
-became one, which is fewer tool calls and less room to invent.
+measured on, that channel's neighbours and the last explanation. One call is
+fewer tokens than four, and less room to invent between them.
 
 Verdicts are written in :mod:`.verdicts`; nothing here writes.
 """
@@ -22,10 +22,9 @@ from typing import Any, Literal, get_args
 from psycopg import sql
 
 from .. import db
+from .runs import SUBJECT_KEY_MATCH
 
 EpisodeState = Literal["all", "open", "ended"]
-
-_MAX_WINDOW_DAYS = 365 * 5
 
 # An episode's trajectory is one observation per evaluation tick, so a long
 # open episode has plenty; the bundle keeps the most recent stretch.
@@ -52,17 +51,17 @@ _EPISODE_COLUMNS = sql.SQL(
     """
 )
 
-# The trigger writes one ledger row per episode event, so a run's subject key
-# names the episode and may carry the event kind behind a colon; the first
-# segment is the episode whichever shape the key has. A run without a `tldr`
-# never produced an explanation — a failure has nothing to show beside the
-# episode.
+# An explanation is what a completed run produced: a run still going, capped
+# before it started or failed has nothing to show beside the episode. The
+# subject key names the episode in either of the two shapes `SUBJECT_KEY_MATCH`
+# accepts, so bind the episode expression twice.
 _NEWEST_EXPLANATION = sql.SQL(
     """
     SELECT r.id AS run_id, r.tldr, r.text, r.created_at
     FROM agent_runs r
     WHERE r.subject_kind = 'episode'
-      AND split_part(r.subject_key, ':', 1) = {episode}
+      AND {key_match}
+      AND r.status = 'completed'
       AND r.tldr IS NOT NULL
     ORDER BY r.created_at DESC
     LIMIT 1
@@ -90,9 +89,7 @@ async def list_episodes(
         raise ValueError(
             f"invalid_state: {state!r}; must be one of {', '.join(get_args(EpisodeState))}"
         )
-    if days <= 0:
-        raise ValueError(f"invalid_days: {days}")
-    days = min(days, _MAX_WINDOW_DAYS)
+    days = db.window_days(days)
 
     # A named episode is answered whatever its age — the window is for
     # browsing, not for hiding a verdict somebody just wrote.
@@ -131,7 +128,9 @@ async def list_episodes(
         columns=_EPISODE_COLUMNS,
         catalog=_CATALOG_JOIN,
         verdicts=_VERDICT_JOIN,
-        explanation=_NEWEST_EXPLANATION.format(episode=sql.SQL("e.id::text")),
+        explanation=_NEWEST_EXPLANATION.format(
+            key_match=SUBJECT_KEY_MATCH.format(key=sql.SQL("e.id::text"))
+        ),
         where=sql.SQL(" AND ").join(where_parts),
     )
     result = await db.read(
@@ -181,6 +180,8 @@ async def get_episode(*, episode_id: int) -> dict[str, Any]:
         raise ValueError(f"unknown_episode: {episode_id}; call list_episodes to find a valid id")
     episode = found[0]
 
+    # Bounded by its own primary key: at most one appeared, escalated and
+    # ended per episode.
     events = await db.lookup(
         "get_episode",
         "episode_events",
@@ -254,10 +255,11 @@ async def _channel_and_siblings(
 
 
 async def _newest_explanation(episode_id: int) -> dict[str, Any] | None:
+    """The last thing the platform said about this episode, or None."""
     rows = await db.lookup(
         "get_episode",
         "agent_runs",
-        _NEWEST_EXPLANATION.format(episode=sql.SQL("%s")),
-        (str(episode_id),),
+        _NEWEST_EXPLANATION.format(key_match=SUBJECT_KEY_MATCH.format(key=sql.Placeholder())),
+        (str(episode_id), str(episode_id)),
     )
     return rows[0] if rows else None
