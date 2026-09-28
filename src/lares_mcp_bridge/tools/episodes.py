@@ -34,6 +34,12 @@ _SIBLING_LIMIT = 100
 # The subject carries the group address the fault was measured on.
 _SUBJECT_GA = sql.SQL("substring(e.subject from '[0-9]+/[0-9]+/[0-9]+')")
 
+# The floor a channel sits on, read from its catalog name. The room column
+# alone does not identify a room: of the 32 rooms in the catalog, `Flur`
+# exists on three floors. The token is never the first or the last name part
+# and never appears twice, so this reads it exactly.
+_FLOOR = sql.SQL("substring({name} from '\\.(KG|EG|OG|DG|UG)\\.')")
+
 # The catalog turns that address into the name and room a person recognises.
 _CATALOG_JOIN = sql.SQL("LEFT JOIN ga_catalog c ON c.ga = {ga}").format(ga=_SUBJECT_GA)
 
@@ -239,15 +245,25 @@ async def _channel_and_siblings(
     if not entry or entry[0]["room"] is None:
         return (entry[0] if entry else None), [], False
 
+    # Same room, unless both names name a floor and it is a different one.
+    # Not "same floor": five rooms carry some channels with a floor in the
+    # name and some without, and the strict rule would cut those in half.
     siblings = await db.read(
         "get_episode",
         "ga_catalog",
-        """
-        SELECT ga, name, function, dpt, description
-        FROM ga_catalog WHERE room = %s AND ga <> %s
-        ORDER BY name
-        """,
-        (entry[0]["room"], ga),
+        sql.SQL(
+            """
+            SELECT ga, name, function, dpt, description
+            FROM ga_catalog
+            WHERE room = %s AND ga <> %s
+              AND ({mine} IS NULL OR {theirs} IS NULL OR {theirs} = {mine})
+            ORDER BY name
+            """
+        ).format(
+            mine=_FLOOR.format(name=sql.Placeholder()),
+            theirs=_FLOOR.format(name=sql.SQL("name")),
+        ),
+        (entry[0]["room"], ga, entry[0]["name"], entry[0]["name"]),
         limit=_SIBLING_LIMIT,
         overflow="truncate",
     )

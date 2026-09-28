@@ -35,7 +35,7 @@ async def test_list_episodes_filters_by_state_and_window(clean_verdicts: None) -
 
     ended_only = await episodes.list_episodes(state="ended", days=365)
     assert all(r["ended_at"] is not None for r in ended_only["episodes"])
-    assert ended_only["row_count"] == 3
+    assert ended_only["row_count"] == 4
 
     # The window is an overlap, so the episode that started 5 hours ago and
     # the one that ran three days ago both fall inside a week.
@@ -114,6 +114,30 @@ async def test_get_episode_bundles_the_evidence_of_one_episode(clean_verdicts: N
     assert bundle["explanation"]["tldr"] == "Auch die Nachbarkanäle des Geräts schweigen."
     assert bundle["explanation"]["text"].startswith("Seit der Eskalation")
     assert bundle["explanation"]["run_id"] is not None
+
+
+async def test_siblings_stay_on_the_floor_of_their_channel(clean_verdicts: None) -> None:
+    """One room name can cover several floors — in the real catalog `Flur`
+    does, on three. Neighbours from another floor are not neighbours, and an
+    explanation that lists them is worse than one that lists none."""
+    flur = await _episode_id_of("1/4/2")  # Lighting.EG.Flur.Ceiling
+    bundle = await episodes.get_episode(episode_id=flur)
+
+    assert bundle["channel"]["name"] == "Lighting.EG.Flur.Ceiling"
+    by_ga = {s["ga"] for s in bundle["siblings"]}
+    # Same room, same floor — and the floorless channel of that room, which
+    # belongs to every floor's view of it.
+    assert by_ga == {"1/4/3", "1/4/9"}
+    # The KG channels share the room name and nothing else.
+    assert "1/4/0" not in by_ga
+    assert "1/4/1" not in by_ga
+
+
+async def test_siblings_of_a_single_floor_room_are_untouched(clean_verdicts: None) -> None:
+    """Most rooms exist once; the floor rule must not narrow those at all."""
+    bedroom = await _episode_id_of("knx [1/2/2]")
+    bundle = await episodes.get_episode(episode_id=bedroom)
+    assert {s["ga"] for s in bundle["siblings"]} == {"1/2/0", "1/2/1"}
 
 
 async def test_get_episode_carries_the_verdict_it_already_has(clean_verdicts: None) -> None:

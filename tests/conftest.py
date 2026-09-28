@@ -181,6 +181,23 @@ def _seed(conn: psycopg.Connection) -> None:
         """
     )
 
+    # One room on two floors, named the way production names them: the room
+    # column alone cannot tell them apart, only the floor token in the name
+    # can. `Flur` is the single room in the real catalog that does this, and
+    # the sibling query has to survive it.
+    conn.execute(
+        """
+        INSERT INTO ga_catalog (ga, name, room, function, dpt, description) VALUES
+            ('1/4/0', 'Lighting.KG.Flur.Ceiling',  'Flur', 'Lighting', '1.001', NULL),
+            ('1/4/1', 'Sensors.KG.Flur.Motion',    'Flur', 'Motion',   '1.018', NULL),
+            ('1/4/2', 'Lighting.EG.Flur.Ceiling',  'Flur', 'Lighting', '1.001', NULL),
+            ('1/4/3', 'Sensors.EG.Flur.Motion',    'Flur', 'Motion',   '1.018', NULL),
+            -- A channel of the same room whose name carries no floor at all:
+            -- it belongs to every floor's view of the room, never excluded.
+            ('1/4/9', 'General.Flur.Scenes',       'Flur', 'Allgemein','17.001', NULL)
+        """
+    )
+
     # KNX seed — 200 readings spread across the catalog GAs (i % 5 picks 0..4
     # which maps to 1/2/0..1/2/4 — temp/humidity in two rooms).
     conn.execute(
@@ -355,7 +372,11 @@ def _seed(conn: psycopg.Connection) -> None:
             ('constancy', 'knx [1/2/2]', NOW() - INTERVAL '9 days',
              NOW() - INTERVAL '9 days',  NOW() - INTERVAL '8 days',  2, 4.0,  false),
             ('constancy', 'ems boiler',  NOW() - INTERVAL '40 days',
-             NOW() - INTERVAL '39 days', NOW() - INTERVAL '39 days', 2, 3.5,  true)
+             NOW() - INTERVAL '39 days', NOW() - INTERVAL '39 days', 2, 3.5,  true),
+            -- Subject as the engine writes it in production: the bare group
+            -- address, here on the floor-ambiguous room.
+            ('channel_silence', '1/4/2', NOW() - INTERVAL '60 days',
+             NOW() - INTERVAL '60 days', NOW() - INTERVAL '59 days', 2, 5.0, false)
         """
     )
 
