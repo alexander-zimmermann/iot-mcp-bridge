@@ -329,7 +329,7 @@ async def query_unifi_events(
     event_type: str | None = None,
     min_score: int | None = None,
     event_id: str | None = None,
-    limit: int = 200,
+    limit: int = 20,
 ) -> dict[str, Any]:
     """Recent UniFi Protect Alarm Manager events for security review.
 
@@ -350,7 +350,7 @@ async def query_unifi_events(
                            lives in ``sourceEvent.score``
     * ``event_id``       — exact UUID; use to look up details for one alarm
 
-    Default ``limit`` is 200, capped at the server's row limit. When more
+    Default ``limit`` is 20, capped at the server's row limit. When more
     rows match, the newest ``limit`` rows are returned with ``truncated: true``.
     """
     if min_score is not None and not 0 <= min_score <= 100:

@@ -43,6 +43,7 @@ from .tools import domain as domain_tools
 from .tools import episodes as episode_tools
 from .tools import forecasts as forecasts_tools
 from .tools import live as live_tools
+from .tools import presence as presence_tools
 from .tools import runs as run_tools
 from .tools import sources as sources_tools
 from .tools import timeseries as timeseries_tools
@@ -297,7 +298,7 @@ async def query_unifi_events(
     event_type: str | None = None,
     min_score: int | None = None,
     event_id: str | None = None,
-    limit: int = 200,
+    limit: int = 20,
 ) -> dict[str, Any]:
     """Recent UniFi Protect Alarm Manager events for security review.
 
@@ -313,7 +314,7 @@ async def query_unifi_events(
     * ``min_score``      — confidence floor 0..100
     * ``event_id``       — exact UUID; use to fetch details for one alarm
 
-    Default ``limit`` 200; effective cap ``min(limit, query_row_limit)``.
+    Default ``limit`` 20; effective cap ``min(limit, query_row_limit)``.
     When more rows match, the newest ``limit`` rows are returned with
     ``truncated: true`` — narrow the filters or shorten the window for
     the rest.
@@ -328,6 +329,26 @@ async def query_unifi_events(
         event_id=event_id,
         limit=limit,
     )
+
+
+@mcp.tool()
+async def query_presence(from_ts: str, to_ts: str) -> dict[str, Any]:
+    """Who was at home, and when the house was empty — a few lines, not raw events.
+
+    Use this whenever an answer turns on whether somebody was in the house:
+    an appliance drawing power, a door or window opened, a light left on.
+    It reads each person's presence (``Person.<name>.Präsenz``), the state it
+    had when the window opened included.
+
+    Returns ``persons`` — per name, spans ``{"from", "to", "state"}`` covering
+    the whole window, ``state`` one of ``"home"``, ``"away"`` or
+    ``"unknown"`` (no state known yet) — ``house_empty``: the spans in which
+    every listed person was known to be away, and ``silent``: the people whose
+    presence reported nothing for a month, about whom nothing is known — an
+    empty house holds only for the listed ones. The window may span at most
+    31 days.
+    """
+    return await presence_tools.query_presence(from_ts=from_ts, to_ts=to_ts)
 
 
 @mcp.tool()
@@ -446,10 +467,12 @@ async def get_episode(episode_id: int) -> dict[str, Any]:
     Returns ``episode`` (the row as ``list_episodes`` gives it, plus
     ``channel_ga``), ``events`` (appeared / escalated / ended with their time
     and severity), ``observations`` (the score curve, oldest first, the most
-    recent 200), ``channel`` (the KNX catalog entry of the group address in
+    recent 48), ``channel`` (the KNX catalog entry of the group address in
     the subject, or ``null``), ``siblings`` (the other catalog channels of the
-    same room) and ``explanation`` (the newest explanation of this episode:
-    ``run_id``, ``tldr``, ``text``, ``created_at``, or ``null``).
+    same room that report a state or a reading — commands left out — the
+    channel's own device first, at most 50) and ``explanation`` (the newest
+    explanation of this episode: ``run_id``, ``tldr``, ``text``,
+    ``created_at``, or ``null``).
 
     An unknown id errors with the id in the message. ``observations_truncated``
     and ``siblings_truncated`` say when a list was cut to its cap.

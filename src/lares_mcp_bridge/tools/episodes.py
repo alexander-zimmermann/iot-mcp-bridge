@@ -22,14 +22,16 @@ from typing import Any, Literal, get_args
 from psycopg import sql
 
 from .. import db
+from .roles import classify, device_of
 from .runs import SUBJECT_KEY_MATCH
 
 EpisodeState = Literal["all", "open", "ended"]
 
-# An episode's trajectory is one observation per evaluation tick, so a long
-# open episode has plenty; the bundle keeps the most recent stretch.
-_OBSERVATION_LIMIT = 200
-_SIBLING_LIMIT = 100
+# An episode's trajectory is one observation per evaluation tick, and each
+# one stays in the model's context for the rest of its run; two days of hourly
+# ticks say where it stands.
+_OBSERVATION_LIMIT = 48
+_SIBLING_LIMIT = 50
 
 # The subject carries the group address the fault was measured on.
 _SUBJECT_GA = sql.SQL("substring(e.subject from '[0-9]+/[0-9]+/[0-9]+')")
@@ -248,7 +250,9 @@ async def _channel_and_siblings(
     # Same room, unless both names name a floor and it is a different one.
     # Not "same floor": five rooms carry some channels with a floor in the
     # name and some without, and the strict rule would cut those in half.
-    siblings = await db.read(
+    # The whole room, since a command is only known as one against its
+    # device's other datapoints; a room has a few hundred channels at most.
+    room = await db.lookup(
         "get_episode",
         "ga_catalog",
         sql.SQL(
@@ -264,10 +268,15 @@ async def _channel_and_siblings(
             theirs=_FLOOR.format(name=sql.SQL("name")),
         ),
         (entry[0]["room"], ga, entry[0]["name"], entry[0]["name"]),
-        limit=_SIBLING_LIMIT,
-        overflow="truncate",
     )
-    return entry[0], siblings.rows, siblings.truncated
+    # A command carries the last order sent, not what its device does; what
+    # is left leads with the channel's own device.
+    names = [row["name"] for row in room]
+    roles = classify(names, [*names, entry[0]["name"]])
+    device = device_of(entry[0]["name"])
+    reported = [row for row in room if roles[row["name"]] != "command"]
+    reported.sort(key=lambda row: device_of(row["name"]) != device)
+    return entry[0], reported[:_SIBLING_LIMIT], len(reported) > _SIBLING_LIMIT
 
 
 async def _newest_explanation(episode_id: int) -> dict[str, Any] | None:

@@ -27,6 +27,7 @@ from .. import db
 from .. import metrics as metrics_module
 from .. import nats as nats_module
 from ..logging_setup import get_logger
+from .roles import Role, classify, device_of
 
 log = get_logger(__name__)
 
@@ -459,50 +460,20 @@ async def get_current_knx(
     }
 
 
-_STATUS_SUFFIX = "-Status"
-_ANOMALY_SUFFIX = "-Anomalie"
 _DEVICE_DATAPOINTS_SQL = "SELECT name FROM ga_catalog WHERE name LIKE ANY(%s)"
 
 
-async def _ga_roles(names: list[str]) -> dict[str, str]:
-    """Role per catalog name from the house convention ``Function.Device.Datapoint``.
-
-    A ``-Status`` datapoint is the state of its device; a sibling it reports on
-    (the same datapoint without the suffix, or one that extends it with a dash:
-    ``Dimmen-Absolut`` for ``Dimmen-Status``) is a command; everything else is a
-    reading. Siblings come from the whole catalog, not the caller's filter, so a
-    lone ``Dimmen-Absolut`` match still knows it is a command.
-    """
-    devices = {name.rpartition(".")[0] for name in names}
+async def _ga_roles(names: list[str]) -> dict[str, Role]:
+    """Role per catalog name (see :mod:`.roles`), its devices read from the whole
+    catalog rather than the caller's filter."""
+    devices = {device_of(name) for name in names}
     rows = await db.lookup(
         "get_current_knx",
         "ga_catalog",
         _DEVICE_DATAPOINTS_SQL,
         ([f"{device}.%" for device in devices],),
     )
-    datapoints: dict[str, set[str]] = {device: set() for device in devices}
-    for row in rows:
-        device, _, datapoint = row["name"].rpartition(".")
-        if device in datapoints:
-            datapoints[device].add(datapoint)
-
-    roles: dict[str, str] = {}
-    for name in names:
-        device, _, datapoint = name.rpartition(".")
-        bases = [
-            point.removesuffix(_STATUS_SUFFIX)
-            for point in datapoints[device]
-            if point.endswith(_STATUS_SUFFIX)
-        ]
-        if datapoint.endswith(_STATUS_SUFFIX):
-            roles[name] = "status"
-        elif datapoint.endswith(_ANOMALY_SUFFIX):
-            roles[name] = "reading"
-        elif any(datapoint == base or datapoint.startswith(base + "-") for base in bases):
-            roles[name] = "command"
-        else:
-            roles[name] = "reading"
-    return roles
+    return classify(names, [row["name"] for row in rows])
 
 
 async def _knx_last_values(gas: list[str]) -> dict[str, tuple[Any, datetime]]:

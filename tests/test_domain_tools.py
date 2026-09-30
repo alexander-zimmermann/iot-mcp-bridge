@@ -240,6 +240,15 @@ async def test_correlate_events_unknown_table(db_pool: None) -> None:
 # =====================================================================
 
 
+async def test_unifi_events_default_to_the_newest_twenty(db_pool: None) -> None:
+    """A camera log is long; an unfiltered call stays short unless asked otherwise."""
+    f, t = _now_window()
+    out = await domain_tools.query_unifi_events(f, t)
+    assert out["limit"] == 20
+    assert out["row_count"] == 20
+    assert out["truncated"] is True
+
+
 async def test_unifi_events_truncates_newest_first_with_flag(db_pool: None) -> None:
     f, t = _now_window()
     out = await domain_tools.query_unifi_events(f, t, limit=5)
@@ -251,7 +260,7 @@ async def test_unifi_events_truncates_newest_first_with_flag(db_pool: None) -> N
 
 async def test_unifi_events_returns_all_in_window(db_pool: None) -> None:
     f, t = _now_window()
-    out = await domain_tools.query_unifi_events(f, t)
+    out = await domain_tools.query_unifi_events(f, t, limit=200)
     assert out["row_count"] == 40
     assert out["truncated"] is False
     sample = out["rows"][0]

@@ -28,6 +28,7 @@ EXPECTED_TOOLS = {
     "query_room_climate",
     "query_knx_events",
     "query_unifi_events",
+    "query_presence",
     "correlate_events",
     "get_forecast",
     "get_pv_forecast",
