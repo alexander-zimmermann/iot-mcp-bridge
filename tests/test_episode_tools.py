@@ -140,6 +140,43 @@ async def test_siblings_of_a_single_floor_room_are_untouched(clean_verdicts: Non
     assert {s["ga"] for s in bundle["siblings"]} == {"1/2/0", "1/2/1"}
 
 
+async def _old_episode_id(fault: str) -> int:
+    result = await episodes.list_episodes(fault=fault, days=500)
+    return int(result["episodes"][0]["episode_id"])
+
+
+async def test_the_bundle_carries_the_last_two_days_of_a_long_trajectory(
+    clean_verdicts: None,
+) -> None:
+    """Every observation stays in the model's context for the rest of its run;
+    the latest 48 hourly ticks say where it stands, the rest is in the flag."""
+    freezer = await _old_episode_id("freezer_icing")
+    bundle = await episodes.get_episode(episode_id=freezer)
+
+    assert len(bundle["observations"]) == 48
+    assert bundle["observations_truncated"] is True
+    scores = [o["score"] for o in bundle["observations"]]
+    # The newest ones, still reading forwards.
+    assert scores[-1] == pytest.approx(2.59)
+    assert scores == sorted(scores)
+
+
+async def test_siblings_are_what_a_device_reports_its_own_device_first(
+    clean_verdicts: None,
+) -> None:
+    """A command carries the last order sent, not what the device is doing, so
+    it is left out; the channels of the same device lead, then the room."""
+    freezer = await _old_episode_id("freezer_icing")
+    bundle = await episodes.get_episode(episode_id=freezer)
+
+    assert [s["name"] for s in bundle["siblings"]] == [
+        "Appliance.GF.Kitchen.Freezer.Switch-Status",
+        "Lighting.GF.Kitchen.Dim-Status",
+        "Lighting.GF.Kitchen.Switch-Status",
+    ]
+    assert bundle["siblings_truncated"] is False
+
+
 async def test_get_episode_carries_the_verdict_it_already_has(clean_verdicts: None) -> None:
     episode_id = await _episode_id("silence", open_only=True)
     await verdicts.set_verdict(target="episode", verdict="nonsense", episode_id=episode_id)

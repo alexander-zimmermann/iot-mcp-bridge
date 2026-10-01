@@ -26,7 +26,7 @@ async def test_read_without_limit_uses_the_configured_cap(
     result = await db.read("t", "knx", _KNX_NEWEST_FIRST, overflow="truncate")
     assert result.limit == settings.query_row_limit
     assert result.truncated is False
-    assert len(result.rows) == 201  # the whole seed fits under the default cap
+    assert len(result.rows) == 211  # the whole seed fits under the default cap
 
 
 async def test_read_caps_a_caller_limit_at_the_configured_cap(settings: Settings) -> None:
@@ -116,7 +116,7 @@ async def test_lookup_runs_the_statement_whole_regardless_of_the_cap(settings: S
     await db.init_pool(settings.model_copy(update={"query_row_limit": 2}))
     try:
         rows = await db.lookup("t", "ga_catalog", "SELECT ga FROM ga_catalog ORDER BY ga")
-        assert len(rows) == 17  # every seeded group address, not the first two
+        assert len(rows) == 25  # every seeded group address, not the first two
     finally:
         await db.close_pool()
 

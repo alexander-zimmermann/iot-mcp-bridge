@@ -198,6 +198,48 @@ def _seed(conn: psycopg.Connection) -> None:
         """
     )
 
+    # A second device in the kitchen: an appliance whose power reading an
+    # episode is measured on, with a switch command and its status.
+    conn.execute(
+        """
+        INSERT INTO ga_catalog (ga, name, room, function, dpt) VALUES
+            ('1/3/10', 'Appliance.GF.Kitchen.Freezer.Power', 'Kitchen', 'Appliance', '7.012'),
+            ('1/3/11', 'Appliance.GF.Kitchen.Freezer.Switch', 'Kitchen', 'Appliance', '1.001'),
+            ('1/3/12', 'Appliance.GF.Kitchen.Freezer.Switch-Status', 'Kitchen', 'Appliance',
+             '1.011')
+        """
+    )
+
+    # Presence: one datapoint per person, named and typed as production has
+    # them, written only on change. Anna and Ben carry a state from before
+    # the test window; Dora's first change falls inside it, Cleo never wrote
+    # one. Anna's stream title is a Person datapoint that is not presence.
+    conn.execute(
+        """
+        INSERT INTO ga_catalog (ga, name, room, function, dpt, description) VALUES
+            ('18/1/0', 'Person.Anna.Präsenz',             'Anwesen', 'Person', '1.011',  NULL),
+            ('18/1/9', 'Person.Anna.Stream.Titel-Status', 'Anwesen', 'Person', '16.001', NULL),
+            ('18/2/0', 'Person.Ben.Präsenz',              'Anwesen', 'Person', '1.011',  NULL),
+            ('18/3/0', 'Person.Cleo.Präsenz',             'Anwesen', 'Person', '1.011',  NULL),
+            ('18/4/0', 'Person.Dora.Präsenz',             'Anwesen', 'Person', '1.011',  NULL)
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO knx (time, ga, knx_main, knx_middle, knx_sub, dpt, value) VALUES
+            ('2026-08-31T20:00:00+00:00', '18/1/0', 18, 1, 0, '1.011', 1),
+            ('2026-09-01T07:00:00+00:00', '18/1/0', 18, 1, 0, '1.011', 0),
+            ('2026-09-01T07:00:30+00:00', '18/1/0', 18, 1, 0, '1.011', 0),
+            ('2026-09-01T17:00:00+00:00', '18/1/0', 18, 1, 0, '1.011', 1),
+            ('2026-09-01T08:00:00+00:00', '18/1/9', 18, 1, 9, '16.001', 0),
+            ('2026-08-31T22:00:00+00:00', '18/2/0', 18, 2, 0, '1.011', 1),
+            ('2026-09-01T09:00:00+00:00', '18/2/0', 18, 2, 0, '1.011', 0),
+            ('2026-09-01T12:00:00+00:00', '18/2/0', 18, 2, 0, '1.011', 1),
+            ('2026-09-01T10:00:00+00:00', '18/4/0', 18, 4, 0, '1.011', 0),
+            ('2026-09-01T11:00:00+00:00', '18/4/0', 18, 4, 0, '1.011', 1)
+        """
+    )
+
     # KNX seed — 200 readings spread across the catalog GAs (i % 5 picks 0..4
     # which maps to 1/2/0..1/2/4 — temp/humidity in two rooms).
     conn.execute(
@@ -427,6 +469,25 @@ def _seed(conn: psycopg.Connection) -> None:
         SELECT e.id, e.started_at, e.peak_score, e.severity, 19.0
         FROM episodes e
         WHERE e.fault = 'silence' AND e.subject = 'knx [1/2/3]'
+        """
+    )
+
+    # A long episode on the kitchen freezer, older than every list window the
+    # other tests use: 60 hourly observations, more than the bundle carries.
+    conn.execute(
+        """
+        INSERT INTO episodes (fault, subject, started_at, last_seen_at, ended_at,
+                              severity, peak_score, folded)
+        VALUES ('freezer_icing', '1/3/10', NOW() - INTERVAL '400 days',
+                NOW() - INTERVAL '397 days', NOW() - INTERVAL '397 days', 2, 2.7, false)
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO episode_observations (episode_id, time, score, severity, value)
+        SELECT e.id, e.started_at + (i || ' hours')::interval, 2.0 + i / 100.0, 2, 38.0
+        FROM episodes e, generate_series(0, 59) AS i
+        WHERE e.fault = 'freezer_icing'
         """
     )
     conn.execute(
