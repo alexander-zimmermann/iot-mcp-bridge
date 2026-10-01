@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta
+
 import pytest
 
+from lares_mcp_bridge import db
 from lares_mcp_bridge.interval import Interval
 from lares_mcp_bridge.tools import sources
 
@@ -25,6 +28,24 @@ async def test_list_data_sources_returns_hypertables_and_caggs(db_pool: None) ->
     assert "knx_1h" in names
     assert names["knx_1h"]["kind"] == sources.KIND_CONTINUOUS_AGGREGATE
     assert names["knx_1h"]["time_column"] == "bucket"
+
+
+async def test_a_range_starts_with_the_oldest_chunk_and_ends_with_the_newest_value(
+    db_pool: None,
+) -> None:
+    """Every query routes through this catalog, so it reads TimescaleDB's chunk
+    metadata instead of scanning a year of compressed data for its minimum: the
+    start is exact to the chunk, the end is the newest value itself."""
+    (truth,) = await db.lookup(
+        "test", "knx", "SELECT min(time) AS oldest, max(time) AS newest FROM knx"
+    )
+    chunk = timedelta(days=7)  # the seed's hypertable keeps the default chunk interval
+
+    knx = {s["name"]: s for s in await sources.list_data_sources()}["knx"]["time_range"]
+
+    oldest = datetime.fromisoformat(truth["oldest"])
+    assert oldest - chunk < datetime.fromisoformat(knx["min"]) <= oldest
+    assert knx["max"] == truth["newest"]
 
 
 async def test_get_schema_returns_columns_and_jsonb_keys(db_pool: None) -> None:
