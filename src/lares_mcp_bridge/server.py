@@ -146,7 +146,9 @@ async def list_data_sources() -> list[dict[str, Any]]:
     """List hypertables and continuous aggregates with their time range.
 
     Use this first to discover what data is available before calling
-    ``get_schema`` or ``query_timeseries``.
+    ``get_schema`` or ``query_timeseries``. ``time_range.min`` is where the
+    stored data starts, to the day for KNX; ``time_range.max`` is the newest
+    value.
     """
     return await sources_tools.list_data_sources()
 

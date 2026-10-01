@@ -21,10 +21,9 @@ KIND_HYPERTABLE = "hypertable"
 KIND_CONTINUOUS_AGGREGATE = "continuous_aggregate"
 
 # Every tool call funnels through list_data_sources() for validation and CAGG
-# routing, and the underlying catalog walk (2 + 2N queries incl. a MIN/MAX scan
-# per source) dwarfs the actual tool query. Hypertables and CAGGs change rarely,
-# so a short single-entry TTL cache removes the repeat cost; new tables show up
-# after at most one TTL period.
+# routing. The catalog walk reads metadata only, but it is still 2 + 3N small
+# queries; hypertables and CAGGs change rarely, so a short single-entry TTL
+# cache removes the repeat cost, and new tables show up after one TTL period.
 _SOURCES_CACHE_TTL_SECONDS = 60
 # Alias pins the key/value types for both mypy and Pyright — the cachetools
 # stubs cannot infer them from an otherwise-empty constructor.
@@ -50,10 +49,14 @@ class Source:
     time_column: str
 
 
+# `storage_*` names the hypertable that holds a source's chunks: the table
+# itself, or a continuous aggregate's materialization hypertable.
 _LIST_HYPERTABLES_SQL = """
 SELECT
     h.hypertable_schema AS schema,
     h.hypertable_name   AS name,
+    h.hypertable_schema AS storage_schema,
+    h.hypertable_name   AS storage_name,
     obj_description(format('%%I.%%I', h.hypertable_schema, h.hypertable_name)::regclass, 'pg_class')
         AS description
 FROM timescaledb_information.hypertables h
@@ -64,6 +67,8 @@ _LIST_CAGGS_SQL = """
 SELECT
     c.view_schema AS schema,
     c.view_name   AS name,
+    c.materialization_hypertable_schema AS storage_schema,
+    c.materialization_hypertable_name   AS storage_name,
     obj_description(format('%%I.%%I', c.view_schema, c.view_name)::regclass, 'pg_class')
         AS description
 FROM timescaledb_information.continuous_aggregates c
@@ -87,7 +92,16 @@ ORDER BY
 LIMIT 1
 """
 
-_TIME_RANGE_SQL = sql.SQL("SELECT MIN({col}) AS min_ts, MAX({col}) AS max_ts FROM {tbl}")
+# A MIN over a year of compressed chunks has no index to use and decompresses
+# them all; the chunk metadata knows where the data starts, to the chunk.
+_CHUNK_SPAN_SQL = """
+SELECT min(range_start) AS oldest_chunk, max(range_start) AS newest_chunk
+FROM timescaledb_information.chunks
+WHERE hypertable_schema = %s AND hypertable_name = %s
+"""
+
+# The newest value is read exactly, but from the newest chunk only.
+_NEWEST_SQL = sql.SQL("SELECT MAX({col}) AS max_ts FROM {tbl} WHERE {col} >= %s")
 
 _COLUMNS_SQL = """
 SELECT column_name, data_type, is_nullable
@@ -118,17 +132,29 @@ async def _detect_time_column(schema: str, name: str) -> str | None:
     return str(found[0]["column_name"]) if found else None
 
 
-async def _time_range(schema: str, name: str, time_col: str) -> dict[str, Any]:
-    stmt = _TIME_RANGE_SQL.format(col=sql.Identifier(time_col), tbl=sql.Identifier(schema, name))
-    (row,) = await db.lookup("list_data_sources", name, stmt)
-    return {"min": row["min_ts"], "max": row["max_ts"]}
+async def _time_range(source: dict[str, Any], time_col: str) -> dict[str, Any]:
+    """Where a source's data starts, to the chunk, and its newest value, exactly."""
+    (span,) = await db.lookup(
+        "list_data_sources",
+        _METADATA,
+        _CHUNK_SPAN_SQL,
+        (source["storage_schema"], source["storage_name"]),
+    )
+    if span["newest_chunk"] is None:
+        return {"min": None, "max": None}
+    stmt = _NEWEST_SQL.format(
+        col=sql.Identifier(time_col), tbl=sql.Identifier(source["schema"], source["name"])
+    )
+    (row,) = await db.lookup("list_data_sources", source["name"], stmt, (span["newest_chunk"],))
+    return {"min": span["oldest_chunk"], "max": row["max_ts"]}
 
 
 async def list_data_sources() -> list[dict[str, Any]]:
     """List all hypertables and continuous aggregates, with their time range.
 
     Each entry contains: ``schema``, ``name``, ``kind``, ``description``,
-    ``time_column``, ``time_range`` (``min``/``max``).
+    ``time_column``, ``time_range`` (``min``: the start of the oldest chunk,
+    ``max``: the newest value).
     """
     cached = _sources_cache.get("sources")
     if cached is not None:
@@ -144,7 +170,7 @@ async def list_data_sources() -> list[dict[str, Any]]:
         time_col = await _detect_time_column(r["schema"], r["name"])
         time_range: dict[str, Any] = {"min": None, "max": None}
         if time_col:
-            time_range = await _time_range(r["schema"], r["name"], time_col)
+            time_range = await _time_range(r, time_col)
         out.append(
             {
                 "name": r["name"],
