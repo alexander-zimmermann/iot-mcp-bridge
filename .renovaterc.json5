@@ -3,5 +3,20 @@
   "extends": [
     "github>alexander-zimmermann/lares//.renovate/sidecarBase.json5",
     "github>alexander-zimmermann/lares//.renovate/sidecarPython.json5",
+    // Tracks the lares-diagnostics-engine git tag in pyproject.toml.
+    "github>alexander-zimmermann/lares//.renovate/sidecarCoreDep.json5",
+  ],
+  "packageRules": [
+    {
+      // The regex manager edits pyproject.toml only; uv.lock follows in the same commit
+      "matchDepNames": ["alexander-zimmermann/lares-diagnostics-engine"],
+      "postUpgradeTasks": {
+        "commands": ["uv lock --upgrade-package lares-diagnostics-engine"],
+        "fileFilters": ["uv.lock"],
+        "executionMode": "branch",
+        // containerbase installs uv through pip, so python comes first
+        "installTools": { "python": {}, "uv": {} },
+      },
+    },
   ],
 }

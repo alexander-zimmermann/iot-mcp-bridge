@@ -14,14 +14,21 @@ and runs its statement verbatim. Neither hands the tool a connection, a
 metric label or the +1 trick. Statements are always placeholder-parsed, so a
 literal ``%`` is written ``%%``.
 
+``blocking_read()`` is the one door that does hand out a connection: library
+code that reads through a synchronous psycopg connection (the engine's
+back-test) gets one of its own on the read role, in a worker thread, with
+the transaction opened READ ONLY.
+
 The caps a tool's own arguments get clamped to live here too, beside the row
 limit they belong with: ``window_days()`` for the day window every list tool
-takes.
+takes, ``row_cap()`` for a row limit a tool cuts a list to itself.
 """
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+import asyncio
+from collections.abc import Callable, Iterator, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Literal, LiteralString
@@ -44,6 +51,8 @@ _Pool = AsyncConnectionPool[psycopg.AsyncConnection[DictRow]]
 _pool: _Pool | None = None
 _write_pool: _Pool | None = None
 _row_limit: int = 0
+# The read role's DSN, for the connections blocking_read() opens beside the pool.
+_read_dsn: str | None = None
 
 # The write pool serves one tool called by one person at a time; two
 # connections is already generous.
@@ -69,6 +78,13 @@ def window_days(days: int) -> int:
     return min(days, _MAX_WINDOW_DAYS)
 
 
+def row_cap(limit: int | None) -> int:
+    """Validate a caller's row limit and clamp it to the configured row limit."""
+    if limit is not None and limit <= 0:
+        raise ValueError(f"invalid_limit: {limit}")
+    return _row_limit if limit is None else min(limit, _row_limit)
+
+
 @dataclass(frozen=True)
 class Result:
     """Rows of one bounded read, datetimes already isoformat, plus the cap that shaped them."""
@@ -92,11 +108,12 @@ async def _open_pool(dsn: str, min_size: int, max_size: int) -> _Pool:
 
 async def init_pool(settings: Settings) -> _Pool:
     """Open the module-level read pool and take the row cap. Idempotent once open."""
-    global _pool, _row_limit
+    global _pool, _row_limit, _read_dsn
     if _pool is not None:
         return _pool
     _pool = await _open_pool(settings.db_dsn, settings.db_pool_min, settings.db_pool_max)
     _row_limit = settings.query_row_limit
+    _read_dsn = settings.db_dsn
     log.info(
         "db_pool_ready",
         host=settings.db_host,
@@ -133,7 +150,8 @@ async def init_write_pool(settings: Settings) -> _Pool | None:
 
 async def close_pool() -> None:
     """Close and drop both module-level pools (no-op when already closed)."""
-    global _pool, _write_pool
+    global _pool, _write_pool, _read_dsn
+    _read_dsn = None
     if _pool is not None:
         await _pool.close()
         _pool = None
@@ -172,12 +190,19 @@ def _serialize(row: dict[str, Any]) -> dict[str, Any]:
     return {k: (v.isoformat() if isinstance(v, datetime) else v) for k, v in row.items()}
 
 
-async def _execute(
-    pool: _Pool, tool: str, table_used: str, stmt: Statement, params: Sequence[Any]
-) -> list[dict[str, Any]]:
+@contextmanager
+def _measured(tool: str, table_used: str) -> Iterator[None]:
+    """Count one query of ``tool`` on ``table_used`` and time it."""
     m = metrics_module.get()
     m.db_queries.labels(tool=tool, table_used=table_used).inc()
     with m.db_query_duration.labels(tool=tool).time():
+        yield
+
+
+async def _execute(
+    pool: _Pool, tool: str, table_used: str, stmt: Statement, params: Sequence[Any]
+) -> list[dict[str, Any]]:
+    with _measured(tool, table_used):
         async with pool.connection() as conn:
             rows = await (await conn.execute(stmt, params)).fetchall()
     return [_serialize(r) for r in rows]
@@ -203,9 +228,7 @@ async def read(
     ``invalid_limit``.
     """
     pool = _require_pool()
-    if limit is not None and limit <= 0:
-        raise ValueError(f"invalid_limit: {limit}")
-    effective = _row_limit if limit is None else min(limit, _row_limit)
+    effective = row_cap(limit)
 
     bounded = sql.SQL("{stmt} LIMIT %s").format(
         stmt=sql.SQL(stmt) if isinstance(stmt, str) else stmt
@@ -229,6 +252,29 @@ async def lookup(
     in the statement itself.
     """
     return await _execute(_require_pool(), tool, table_used, stmt, params)
+
+
+async def blocking_read[T](
+    tool: str, table_used: str, work: Callable[[psycopg.Connection[DictRow]], T]
+) -> T:
+    """Run ``work`` on a synchronous read connection of its own, in a worker thread.
+
+    The connection carries the read role and opens its transaction READ ONLY,
+    so whatever ``work`` runs cannot write; it is closed when ``work`` returns.
+    Counted as one query of ``tool`` on ``table_used``, however many
+    statements ``work`` runs.
+    """
+    if _read_dsn is None:
+        raise RuntimeError("DB pool not initialised — call init_pool() first")
+    dsn = _read_dsn
+
+    def run() -> T:
+        with psycopg.connect(dsn, row_factory=dict_row) as conn:
+            conn.read_only = True
+            return work(conn)
+
+    with _measured(tool, table_used):
+        return await asyncio.to_thread(run)
 
 
 async def write(

@@ -888,6 +888,21 @@ wheels = [
 ]
 
 [[package]]
+name = "lares-diagnostics-engine"
+version = "1.42.0"
+source = { git = "https://github.com/alexander-zimmermann/lares-diagnostics-engine?rev=v1.42.0#c4b4e608e602d2a7debd39dba65dd2e3e20d8478" }
+dependencies = [
+    { name = "httpx" },
+    { name = "jsonschema" },
+    { name = "nats-py", extra = ["nkeys"] },
+    { name = "psycopg", extra = ["binary", "pool"] },
+    { name = "pydantic" },
+    { name = "pydantic-settings" },
+    { name = "pyyaml" },
+    { name = "structlog" },
+]
+
+[[package]]
 name = "lares-mcp-bridge"
 version = "1.24.0"
 source = { editable = "." }
@@ -895,6 +910,7 @@ dependencies = [
     { name = "cachetools" },
     { name = "fastmcp" },
     { name = "httpx" },
+    { name = "lares-diagnostics-engine" },
     { name = "nats-py", extra = ["nkeys"] },
     { name = "prometheus-client" },
     { name = "psycopg", extra = ["binary", "pool"] },
@@ -923,6 +939,7 @@ requires-dist = [
     { name = "cachetools", specifier = ">=7.2.0" },
     { name = "fastmcp", specifier = ">=4.0.10" },
     { name = "httpx", specifier = ">=0.28.1" },
+    { name = "lares-diagnostics-engine", git = "https://github.com/alexander-zimmermann/lares-diagnostics-engine?rev=v1.42.0" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=2.4.0" },
     { name = "nats-py", extras = ["nkeys"], specifier = ">=2.16.0" },
     { name = "pre-commit", marker = "extra == 'dev'", specifier = ">=4.6.2" },
