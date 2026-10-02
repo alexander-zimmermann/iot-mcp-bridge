@@ -84,6 +84,12 @@ class Settings(BaseSettings):
     wikijs_url: str | None = None
     wikijs_token_file: str | None = None
 
+    # lares-agent-trigger: where start_run carries its request. Both must be
+    # set (one alone is a config error); the key both pods share arrives as a
+    # mounted Secret file.
+    trigger_url: str | None = None
+    trigger_key_file: str | None = None
+
     @model_validator(mode="after")
     def _resolve_db_secret_files(self) -> Settings:
         if self.db_username_file:
@@ -141,6 +147,12 @@ class Settings(BaseSettings):
             raise ValueError("MCP_WIKIJS_URL and MCP_WIKIJS_TOKEN_FILE must be set together")
         return self
 
+    @model_validator(mode="after")
+    def _check_trigger_config(self) -> Settings:
+        if bool(self.trigger_url) != bool(self.trigger_key_file):
+            raise ValueError("MCP_TRIGGER_URL and MCP_TRIGGER_KEY_FILE must be set together")
+        return self
+
     @property
     def nats_servers_list(self) -> list[str]:
         return [s.strip() for s in self.nats_servers.split(",") if s.strip()]
@@ -163,6 +175,10 @@ class Settings(BaseSettings):
     @property
     def wikijs_enabled(self) -> bool:
         return bool(self.wikijs_url and self.wikijs_token_file)
+
+    @property
+    def trigger_enabled(self) -> bool:
+        return bool(self.trigger_url and self.trigger_key_file)
 
     @property
     def db_write_dsn(self) -> str:
