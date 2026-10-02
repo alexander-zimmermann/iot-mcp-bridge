@@ -3,8 +3,10 @@ explanation opens with."""
 
 from __future__ import annotations
 
+import psycopg
 import pytest
 
+from lares_mcp_bridge.config import Settings
 from lares_mcp_bridge.tools import episodes, verdicts
 
 
@@ -58,6 +60,40 @@ async def test_list_episodes_carries_the_newest_explanation(clean_verdicts: None
     unexplained = await _episode_id("constancy")
     assert by_id[unexplained]["explanation_tldr"] is None
     assert by_id[unexplained]["explanation_run_id"] is None
+
+
+async def test_a_newer_run_without_output_leaves_the_explanation_standing(
+    settings: Settings, clean_verdicts: None
+) -> None:
+    """Only a completed run with a first line explains: a newer run on the
+    episode that is still going or failed changes nothing, and a key whose id
+    merely starts with the same digits belongs to another episode."""
+    explained = await _episode_id("silence", open_only=True)
+    conn = psycopg.connect(settings.db_dsn, autocommit=True)
+    try:
+        added = conn.execute(
+            """
+            INSERT INTO agent_runs (use_case, trigger, subject_kind, subject_key, status,
+                                    error, tldr, text, created_at)
+            VALUES ('explain-episode', 'message', 'episode', %(id)s || ':message:1', 'running',
+                    NULL, NULL, NULL, NOW() - INTERVAL '5 minutes'),
+                   ('explain-episode', 'message', 'episode', %(id)s || ':message:2', 'failed',
+                    'timeout', NULL, NULL, NOW() - INTERVAL '1 minute'),
+                   ('explain-episode', 'event', 'episode', %(id)s || '0:appeared', 'completed',
+                    NULL, 'Ein anderer Vorfall.', 'Ein anderer Vorfall.', NOW())
+            RETURNING id
+            """,
+            {"id": str(explained)},
+        ).fetchall()
+        listed = await episodes.list_episodes(episode_id=explained)
+        bundle = await episodes.get_episode(episode_id=explained)
+    finally:
+        conn.execute("DELETE FROM agent_runs WHERE id = ANY(%s)", ([row[0] for row in added],))
+        conn.close()
+
+    newest = "Auch die Nachbarkanäle des Geräts schweigen."
+    assert listed["episodes"][0]["explanation_tldr"] == newest
+    assert bundle["explanation"]["tldr"] == newest
 
 
 async def test_list_episodes_can_narrow_to_the_unjudged_ones(clean_verdicts: None) -> None:

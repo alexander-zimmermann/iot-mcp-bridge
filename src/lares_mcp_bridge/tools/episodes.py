@@ -23,7 +23,6 @@ from psycopg import sql
 
 from .. import db
 from .roles import classify, device_of
-from .runs import SUBJECT_KEY_MATCH
 
 EpisodeState = Literal["all", "open", "ended"]
 
@@ -43,23 +42,6 @@ _EPISODE_COLUMNS = sql.SQL(
     e.severity, e.started_at, e.last_seen_at, e.ended_at,
     e.peak_score, e.folded, e.externally_delivered,
     e.verdict, e.decided_at
-    """
-)
-
-# An explanation is what a completed run produced: a run still going, capped
-# before it started or failed has nothing to show beside the episode. The
-# subject key names the episode in either of the two shapes `SUBJECT_KEY_MATCH`
-# accepts, so bind the episode expression twice.
-_NEWEST_EXPLANATION = sql.SQL(
-    """
-    SELECT r.id AS run_id, r.tldr, r.text, r.created_at
-    FROM agent_runs r
-    WHERE r.subject_kind = 'episode'
-      AND {key_match}
-      AND r.status = 'completed'
-      AND r.tldr IS NOT NULL
-    ORDER BY r.created_at DESC
-    LIMIT 1
     """
 )
 
@@ -113,15 +95,13 @@ async def list_episodes(
         SELECT {columns},
                x.run_id AS explanation_run_id, x.tldr AS explanation_tldr
         FROM episode_view e
-        LEFT JOIN LATERAL ({explanation}) x ON true
+        -- One rule for an episode's explanation, the dashboard's as well.
+        LEFT JOIN episode_explanation_view x ON x.episode_id = e.id
         WHERE {where}
         ORDER BY e.started_at DESC
         """
     ).format(
         columns=_EPISODE_COLUMNS,
-        explanation=_NEWEST_EXPLANATION.format(
-            key_match=SUBJECT_KEY_MATCH.format(key=sql.SQL("e.id::text"))
-        ),
         where=sql.SQL(" AND ").join(where_parts),
     )
     result = await db.read(
@@ -255,7 +235,10 @@ async def _newest_explanation(episode_id: int) -> dict[str, Any] | None:
     rows = await db.lookup(
         "get_episode",
         "agent_runs",
-        _NEWEST_EXPLANATION.format(key_match=SUBJECT_KEY_MATCH.format(key=sql.Placeholder())),
-        (str(episode_id), str(episode_id)),
+        """
+        SELECT run_id, tldr, text, created_at
+        FROM episode_explanation_view WHERE episode_id = %s
+        """,
+        (episode_id,),
     )
     return rows[0] if rows else None
