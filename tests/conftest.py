@@ -182,19 +182,17 @@ def _seed(conn: psycopg.Connection) -> None:
     )
 
     # One room on two floors, named the way production names them: the room
-    # column alone cannot tell them apart, only the floor token in the name
-    # can. `Flur` is the single room in the real catalog that does this, and
-    # the sibling query has to survive it.
+    # column carries the ETS space id, so these are two rooms that merely
+    # share a word. `Flur` exists three times in the real catalog, one per
+    # storey, and the sibling query must not mix them.
     conn.execute(
         """
         INSERT INTO ga_catalog (ga, name, room, function, dpt, description) VALUES
-            ('1/4/0', 'Lighting.KG.Flur.Ceiling',  'Flur', 'Lighting', '1.001', NULL),
-            ('1/4/1', 'Sensors.KG.Flur.Motion',    'Flur', 'Motion',   '1.018', NULL),
-            ('1/4/2', 'Lighting.EG.Flur.Ceiling',  'Flur', 'Lighting', '1.001', NULL),
-            ('1/4/3', 'Sensors.EG.Flur.Motion',    'Flur', 'Motion',   '1.018', NULL),
-            -- A channel of the same room whose name carries no floor at all:
-            -- it belongs to every floor's view of the room, never excluded.
-            ('1/4/9', 'General.Flur.Scenes',       'Flur', 'Allgemein','17.001', NULL)
+            ('1/4/0', 'Lighting.KG.Flur.Ceiling', 'Flur (K1)', 'Lighting', '1.001', NULL),
+            ('1/4/1', 'Sensors.KG.Flur.Motion',   'Flur (K1)', 'Motion',   '1.018', NULL),
+            ('1/4/2', 'Lighting.EG.Flur.Ceiling', 'Flur (E1)', 'Lighting', '1.001', NULL),
+            ('1/4/3', 'Sensors.EG.Flur.Motion',   'Flur (E1)', 'Motion',   '1.018', NULL),
+            ('1/4/9', 'General.EG.Flur.Scenes',   'Flur (E1)', 'Allgemein','17.001', NULL)
         """
     )
 

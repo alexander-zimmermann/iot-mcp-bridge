@@ -116,19 +116,20 @@ async def test_get_episode_bundles_the_evidence_of_one_episode(clean_verdicts: N
     assert bundle["explanation"]["run_id"] is not None
 
 
-async def test_siblings_stay_on_the_floor_of_their_channel(clean_verdicts: None) -> None:
-    """One room name can cover several floors — in the real catalog `Flur`
-    does, on three. Neighbours from another floor are not neighbours, and an
-    explanation that lists them is worse than one that lists none."""
+async def test_siblings_never_cross_into_a_room_of_the_same_name(
+    clean_verdicts: None,
+) -> None:
+    """`Flur` is three rooms, one per storey, and the catalog keeps them
+    apart by the space id it carries. Neighbours from another storey are not
+    neighbours, and an explanation listing them is worse than one listing
+    none."""
     flur = await _episode_id_of("1/4/2")  # Lighting.EG.Flur.Ceiling
     bundle = await episodes.get_episode(episode_id=flur)
 
-    assert bundle["channel"]["name"] == "Lighting.EG.Flur.Ceiling"
+    assert bundle["channel"]["room"] == "Flur (E1)"
     by_ga = {s["ga"] for s in bundle["siblings"]}
-    # Same room, same floor — and the floorless channel of that room, which
-    # belongs to every floor's view of it.
     assert by_ga == {"1/4/3", "1/4/9"}
-    # The KG channels share the room name and nothing else.
+    # `Flur (K1)` shares the word and nothing else.
     assert "1/4/0" not in by_ga
     assert "1/4/1" not in by_ga
 
