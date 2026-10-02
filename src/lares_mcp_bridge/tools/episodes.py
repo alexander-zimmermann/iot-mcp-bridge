@@ -33,23 +33,16 @@ EpisodeState = Literal["all", "open", "ended"]
 _OBSERVATION_LIMIT = 48
 _SIBLING_LIMIT = 50
 
-# The subject carries the group address the fault was measured on.
-_SUBJECT_GA = sql.SQL("substring(e.subject from '[0-9]+/[0-9]+/[0-9]+')")
-
-# The catalog turns that address into the name and room a person recognises.
-_CATALOG_JOIN = sql.SQL("LEFT JOIN ga_catalog c ON c.ga = {ga}").format(ga=_SUBJECT_GA)
-
-_VERDICT_JOIN = sql.SQL("LEFT JOIN episode_verdicts v ON v.episode_id = e.id")
-
-# Falls back to the bracketed label, then to the subject itself, for subjects
-# that carry no address.
+# `episode_view` resolves a subject against the catalog — the engine says
+# what it names, the view turns that into a channel, a room and a label.
+# The rule lives there once, for this server and the dashboard alike.
 _EPISODE_COLUMNS = sql.SQL(
     """
-    e.id AS episode_id, e.fault, e.subject,
-    COALESCE(c.name, substring(e.subject from '\\[([^]]+)\\]'), e.subject) AS affected,
-    c.room, e.severity, e.started_at, e.last_seen_at, e.ended_at,
+    e.id AS episode_id, e.fault, e.subject, e.entity_kind, e.entity_ref,
+    e.affected, e.room, e.channel_ga, e.channel_name,
+    e.severity, e.started_at, e.last_seen_at, e.ended_at,
     e.peak_score, e.folded, e.externally_delivered,
-    v.verdict, v.decided_at
+    e.verdict, e.decided_at
     """
 )
 
@@ -113,23 +106,19 @@ async def list_episodes(
         where_parts.append(sql.SQL("e.fault = %s"))
         params.append(fault)
     if only_unjudged:
-        where_parts.append(sql.SQL("v.verdict IS NULL"))
+        where_parts.append(sql.SQL("e.verdict IS NULL"))
 
     stmt = sql.SQL(
         """
         SELECT {columns},
                x.run_id AS explanation_run_id, x.tldr AS explanation_tldr
-        FROM episodes e
-        {catalog}
-        {verdicts}
+        FROM episode_view e
         LEFT JOIN LATERAL ({explanation}) x ON true
         WHERE {where}
         ORDER BY e.started_at DESC
         """
     ).format(
         columns=_EPISODE_COLUMNS,
-        catalog=_CATALOG_JOIN,
-        verdicts=_VERDICT_JOIN,
         explanation=_NEWEST_EXPLANATION.format(
             key_match=SUBJECT_KEY_MATCH.format(key=sql.SQL("e.id::text"))
         ),
@@ -164,18 +153,11 @@ async def get_episode(*, episode_id: int) -> dict[str, Any]:
         "episodes",
         sql.SQL(
             """
-            SELECT {columns}, {ga} AS channel_ga
-            FROM episodes e
-            {catalog}
-            {verdicts}
+            SELECT {columns}
+            FROM episode_view e
             WHERE e.id = %s
             """
-        ).format(
-            columns=_EPISODE_COLUMNS,
-            ga=_SUBJECT_GA,
-            catalog=_CATALOG_JOIN,
-            verdicts=_VERDICT_JOIN,
-        ),
+        ).format(columns=_EPISODE_COLUMNS),
         (episode_id,),
     )
     if not found:
@@ -206,7 +188,9 @@ async def get_episode(*, episode_id: int) -> dict[str, Any]:
         overflow="truncate",
     )
 
-    channel, siblings, siblings_truncated = await _channel_and_siblings(episode["channel_ga"])
+    channel, siblings, siblings_truncated = await _channel_and_siblings(
+        episode["channel_ga"], episode["room"]
+    )
     explanation = await _newest_explanation(episode_id)
 
     return {
@@ -222,47 +206,48 @@ async def get_episode(*, episode_id: int) -> dict[str, Any]:
 
 
 async def _channel_and_siblings(
-    ga: str | None,
+    channel_ga: str | None, room: str | None
 ) -> tuple[dict[str, Any] | None, list[dict[str, Any]], bool]:
-    """The catalog entry of ``ga`` and the other channels of its room.
+    """The catalog entry of the channel a fault was measured on, and the
+    other channels of its room.
 
-    A subject without a group address, or one the catalog does not know, has
-    neither — an empty bundle, not an error.
+    A fault measured on a room or a plant has no channel of its own but
+    still has a room, so it gets the neighbours without the entry. One the
+    catalog cannot place has neither — an empty bundle, not an error.
     """
-    if ga is None:
-        return None, [], False
+    entry = None
+    if channel_ga is not None:
+        found = await db.lookup(
+            "get_episode",
+            "ga_catalog",
+            "SELECT ga, name, room, function, dpt, description FROM ga_catalog WHERE ga = %s",
+            (channel_ga,),
+        )
+        entry = found[0] if found else None
+    if room is None:
+        return entry, [], False
 
-    entry = await db.lookup(
-        "get_episode",
-        "ga_catalog",
-        "SELECT ga, name, room, function, dpt, description FROM ga_catalog WHERE ga = %s",
-        (ga,),
-    )
-    if not entry or entry[0]["room"] is None:
-        return (entry[0] if entry else None), [], False
-
-    # The room column identifies a room on its own: it carries the ETS space
-    # id, so the three `Flur` are three rooms. The whole room, since a
-    # command is only known as one against its device's other datapoints;
-    # a room has a few hundred channels at most.
-    room = await db.lookup(
+    # The whole room, since a command is only known as one against its
+    # device's other datapoints; a room has a few hundred channels at most.
+    siblings = await db.lookup(
         "get_episode",
         "ga_catalog",
         """
         SELECT ga, name, function, dpt, description
-        FROM ga_catalog WHERE room = %s AND ga <> %s
+        FROM ga_catalog WHERE room = %s AND ga IS DISTINCT FROM %s
         ORDER BY name
         """,
-        (entry[0]["room"], ga),
+        (room, channel_ga),
     )
     # A command carries the last order sent, not what its device does; what
-    # is left leads with the channel's own device.
-    names = [row["name"] for row in room]
-    roles = classify(names, [*names, entry[0]["name"]])
-    device = device_of(entry[0]["name"])
-    reported = [row for row in room if roles[row["name"]] != "command"]
+    # is left leads with the channel's own device, where there is one.
+    names = [row["name"] for row in siblings]
+    own = entry["name"] if entry else None
+    roles = classify(names, [*names, own] if own else names)
+    device = device_of(own) if own else None
+    reported = [row for row in siblings if roles[row["name"]] != "command"]
     reported.sort(key=lambda row: device_of(row["name"]) != device)
-    return entry[0], reported[:_SIBLING_LIMIT], len(reported) > _SIBLING_LIMIT
+    return entry, reported[:_SIBLING_LIMIT], len(reported) > _SIBLING_LIMIT
 
 
 async def _newest_explanation(episode_id: int) -> dict[str, Any] | None:

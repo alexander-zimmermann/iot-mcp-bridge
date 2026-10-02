@@ -35,13 +35,13 @@ async def test_list_episodes_filters_by_state_and_window(clean_verdicts: None) -
 
     ended_only = await episodes.list_episodes(state="ended", days=365)
     assert all(r["ended_at"] is not None for r in ended_only["episodes"])
-    assert ended_only["row_count"] == 4
+    assert ended_only["row_count"] == 5
 
     # The window is an overlap, so the episode that started 5 hours ago and
     # the one that ran three days ago both fall inside a week.
     recent = await episodes.list_episodes(days=7)
-    assert {r["fault"] for r in recent["episodes"]} == {"silence"}
-    assert recent["row_count"] == 2
+    assert {r["fault"] for r in recent["episodes"]} == {"silence", "fbh_cold"}
+    assert recent["row_count"] == 3
 
 
 async def test_list_episodes_carries_the_newest_explanation(clean_verdicts: None) -> None:
@@ -203,3 +203,18 @@ async def test_get_episode_without_a_group_address_still_bundles(clean_verdicts:
 async def test_get_episode_on_an_unknown_id_is_a_precise_error(clean_verdicts: None) -> None:
     with pytest.raises(ValueError, match="unknown_episode: 999999"):
         await episodes.get_episode(episode_id=999999)
+
+
+async def test_a_room_fault_has_no_channel_but_keeps_its_room(clean_verdicts: None) -> None:
+    """`fbh_cold` is measured on a room: it has no channel of its own, and
+    saying it had one would be a claim the fault never made. The room still
+    resolves, so the neighbours are there to explain it with."""
+    room_episode = await _episode_id_of("eg-buero")
+    bundle = await episodes.get_episode(episode_id=room_episode)
+
+    assert bundle["episode"]["entity_kind"] == "room"
+    assert bundle["episode"]["affected"] == "Bedroom"
+    assert bundle["channel"] is None
+    # Every channel of the room, the ref included: it locates the room, it
+    # is not the channel the fault singled out.
+    assert {s["ga"] for s in bundle["siblings"]} == {"1/2/0", "1/2/1", "1/2/2"}

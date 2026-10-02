@@ -376,6 +376,8 @@ def _seed(conn: psycopg.Connection) -> None:
             id           BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
             fault        TEXT             NOT NULL,
             subject      TEXT             NOT NULL,
+            entity_kind  TEXT             CHECK (entity_kind IN ('channel', 'room', 'plant')),
+            entity_ref   TEXT,
             started_at   TIMESTAMPTZ      NOT NULL,
             last_seen_at TIMESTAMPTZ      NOT NULL,
             ended_at     TIMESTAMPTZ,
@@ -383,6 +385,7 @@ def _seed(conn: psycopg.Connection) -> None:
             peak_score   DOUBLE PRECISION NOT NULL,
             folded       BOOLEAN          NOT NULL DEFAULT false,
             externally_delivered BOOLEAN  NOT NULL DEFAULT false,
+            fingerprint  TEXT,
             created_at   TIMESTAMPTZ      NOT NULL DEFAULT now()
         )
         """
@@ -394,6 +397,44 @@ def _seed(conn: psycopg.Connection) -> None:
             verdict    TEXT        NOT NULL CHECK (verdict IN ('real', 'nonsense')),
             decided_at TIMESTAMPTZ NOT NULL DEFAULT now()
         )
+        """
+    )
+
+    # Verbatim from bootstrap.sql: the readers go through it, so the mirror
+    # has to resolve a subject exactly as production does.
+    conn.execute(
+        r"""
+CREATE OR REPLACE VIEW episode_view AS
+WITH resolved AS (
+    SELECT e.*,
+           COALESCE(
+               e.entity_kind,
+               CASE WHEN e.subject ~ '[0-9]+/[0-9]+/[0-9]+' THEN 'channel' END
+           ) AS kind,
+           COALESCE(
+               e.entity_ref, substring(e.subject from '[0-9]+/[0-9]+/[0-9]+')
+           ) AS ref
+    FROM episodes e
+)
+SELECT r.id, r.fault, r.subject, r.kind AS entity_kind, r.ref AS entity_ref,
+       -- Only a channel fault was measured on the channel the ref names;
+       -- for the others the ref merely locates the room.
+       CASE WHEN r.kind = 'channel' THEN c.ga END   AS channel_ga,
+       CASE WHEN r.kind = 'channel' THEN c.name END AS channel_name,
+       c.room,
+       -- Falls back the way it always did when the catalog does not know
+       -- the address: the bracketed label, then the subject itself.
+       COALESCE(
+           CASE r.kind WHEN 'channel' THEN c.name WHEN 'room' THEN c.room END,
+           substring(r.subject from '\[([^]]+)\]'),
+           r.subject
+       ) AS affected,
+       r.severity, r.started_at, r.last_seen_at, r.ended_at,
+       r.peak_score, r.folded, r.externally_delivered, r.fingerprint,
+       v.verdict, v.decided_at
+FROM resolved r
+LEFT JOIN ga_catalog c ON c.ga = r.ref
+LEFT JOIN episode_verdicts v ON v.episode_id = r.id;
         """
     )
 
@@ -417,6 +458,20 @@ def _seed(conn: psycopg.Connection) -> None:
             -- address, here on the floor-ambiguous room.
             ('channel_silence', '1/4/2', NOW() - INTERVAL '60 days',
              NOW() - INTERVAL '60 days', NOW() - INTERVAL '59 days', 2, 5.0, false)
+        """
+    )
+
+    # A fault measured on a room, the way the engine writes it: the subject
+    # is its own slug, and the entity columns name the room and an address
+    # the catalog resolves to it.
+    conn.execute(
+        """
+        INSERT INTO episodes (fault, subject, entity_kind, entity_ref,
+                              started_at, last_seen_at, ended_at,
+                              severity, peak_score, folded)
+        VALUES ('fbh_cold', 'eg-buero', 'room', '1/2/0',
+                NOW() - INTERVAL '2 days', NOW() - INTERVAL '2 days',
+                NOW() - INTERVAL '2 days', 1, 1.2, false)
         """
     )
 
