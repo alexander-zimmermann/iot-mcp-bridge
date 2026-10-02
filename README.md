@@ -59,6 +59,12 @@ behind high-level questions:
 | `list_runs(use_case, subject_kind, status, days, …)` | The ledger: one row per run of every use case, with what it produced, what it cost and the verdict it carries. A run named by `run_id` comes back with its full output text. |
 | `set_verdict(target, verdict, …)`                 | Records `"real"`/`"nonsense"` on an episode or `"helpful"`/`"useless"` on a run; setting it again overwrites. A run is named by `run_id`, by `subject_kind` + `subject_key` (the newest run on that subject), or by nothing (the newest messenger run). Requires the write credentials below. Nothing acts on a verdict automatically — they are counted per fault and per use case on the dashboard, and thresholds stay a human decision. |
 
+**Runs** (starting a use case of the agent platform now, through [lares-agent-trigger](https://github.com/alexander-zimmermann/lares-agent-trigger); requires `MCP_TRIGGER_URL` + `MCP_TRIGGER_KEY_FILE`)
+
+| Tool                          | What it does                                                                                                   |
+| ----------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `start_run(use_case, subject)` | Asks the trigger to start a declared use case now: on an episode (`subject` = the episode id) or, for a schedule use case, its cron job. The trigger claims the ledger row, counts the day's budget and delivers the output where the use case says; the tool hands back its answer (`run_id` or `job_id`, the `output` targets) or its reason for refusing. Meant for the chat only: its own machine client, so no run the platform starts holds it. |
+
 **Live** (current state straight from NATS JetStream; requires `MCP_NATS_ENABLED=true`)
 
 | Tool                                          | What it does                                                                                                  |
@@ -161,6 +167,8 @@ All settings are environment variables, prefixed with `MCP_`:
 | `MCP_SUBSCRIBE_MAX_SECONDS`          | `30`                        | Hard cap for `subscribe_nats` windows                          |
 | `MCP_WIKIJS_URL`                     | —                           | Wiki.js base URL; with the token file enables the wiki tools   |
 | `MCP_WIKIJS_TOKEN_FILE`              | —                           | Read-only Wiki.js API key from a mounted file                  |
+| `MCP_TRIGGER_URL`                    | —                           | lares-agent-trigger base URL; with the key file enables `start_run` |
+| `MCP_TRIGGER_KEY_FILE`               | —                           | The key the trigger's API takes, from a mounted file           |
 
 When `MCP_AUTH_ENABLED=true`, every request must carry a valid OIDC Bearer token signed by the configured JWKS. Tested against [Authentik](https://goauthentik.io/) but works with any OIDC-compliant authorization server.
 

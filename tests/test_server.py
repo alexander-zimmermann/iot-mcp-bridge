@@ -40,6 +40,7 @@ EXPECTED_TOOLS = {
     "get_episode",
     "list_runs",
     "set_verdict",
+    "start_run",
     "search_wiki",
     "get_wiki_page",
     "list_wiki_pages",

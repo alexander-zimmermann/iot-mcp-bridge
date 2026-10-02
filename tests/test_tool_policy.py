@@ -13,7 +13,7 @@ from lares_mcp_bridge import metrics as metrics_module
 from lares_mcp_bridge import server
 from lares_mcp_bridge.config import Settings
 
-ALLOWLIST = {"lares-agent": ["list_*", "get_*", "query_*"]}
+ALLOWLIST = {"lares-agent": ["list_*", "get_*", "query_*"], "lares-runs": ["start_run"]}
 
 
 @pytest.fixture
@@ -95,3 +95,12 @@ async def test_denied_call_is_refused_and_counted(
         {"tool": "set_verdict", "sub": "lares-agent", "outcome": "denied"},
     )
     assert denied == 1
+
+
+async def test_starting_a_run_is_a_client_of_its_own(
+    policy_settings: Settings, clean_context: None
+) -> None:
+    """The chat holds start_run; the read client every event and cron run uses does not."""
+    assert await _visible_tools(client_id="lares-runs", client_kind="machine") == {"start_run"}
+    structlog.contextvars.clear_contextvars()
+    assert "start_run" not in await _visible_tools(client_id="lares-agent", client_kind="machine")

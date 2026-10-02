@@ -47,6 +47,7 @@ from .tools import presence as presence_tools
 from .tools import runs as run_tools
 from .tools import sources as sources_tools
 from .tools import timeseries as timeseries_tools
+from .tools import trigger as trigger_tools
 from .tools import verdicts as verdict_tools
 from .tools import wiki as wiki_tools
 from .tools.episodes import EpisodeState
@@ -640,6 +641,30 @@ async def get_current_knx(
 
 
 @mcp.tool()
+async def start_run(use_case: str, subject: str | None = None) -> dict[str, Any]:
+    """Start a declared use case now, as a run of its own — only when the
+    owner asks for one in so many words: "Starte die Erklärung zu Episode
+    15510", "lass Propose jetzt laufen". A question — why something happened,
+    what an episode means — is answered in this conversation instead, never by
+    starting a run.
+
+    * ``use_case`` — the declared name, e.g. ``"explain-episode"``
+    * ``subject`` — what the run is about: the episode id for a use case that
+      runs on an episode (``"15510"``); left out for one that runs on a schedule
+
+    The run does not answer here. Its output goes where the use case delivers
+    — ``output`` in the reply names the targets, e.g. Discord and mail — and
+    the run is in the ledger under ``run_id`` (``list_runs``). The trigger
+    refuses a dormant use case, the chat itself, an episode that does not
+    exist, a use case that has spent its runs for the day, a second request
+    while the first run on that episode is still going (it names that run),
+    and a schedule's job a person paused; the error says which, so tell the
+    owner.
+    """
+    return await trigger_tools.start_run(use_case, subject)
+
+
+@mcp.tool()
 async def search_wiki(query: str) -> dict[str, Any]:
     """Search the house wiki — the human-written references: devices, vendor
     docs digests, how-the-house-works notes.
@@ -731,6 +756,8 @@ def build_app() -> Starlette:
             await nats_module.init(_settings)
         if _settings.wikijs_enabled:
             await wiki_tools.init(_settings)
+        if _settings.trigger_enabled:
+            await trigger_tools.init(_settings)
         metrics_server, metrics_thread = metrics_module.serve(
             metrics_module.get(), _settings.metrics_port
         )
@@ -742,6 +769,7 @@ def build_app() -> Starlette:
             auth_enabled=_settings.auth_enabled,
             nats_enabled=_settings.nats_enabled,
             wikijs_enabled=_settings.wikijs_enabled,
+            trigger_enabled=_settings.trigger_enabled,
         )
         try:
             async with mcp_app.lifespan(app):
@@ -750,6 +778,7 @@ def build_app() -> Starlette:
             metrics_server.shutdown()
             metrics_thread.join()
             await wiki_tools.close()
+            await trigger_tools.close()
             await nats_module.close()
             await db.close_pool()
 
