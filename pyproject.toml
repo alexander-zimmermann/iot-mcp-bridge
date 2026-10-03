@@ -27,6 +27,7 @@ dependencies = [
     "cachetools>=7.2.0",
     "prometheus-client>=0.26.0",
     "nats-py[nkeys]>=2.16.0",
+    "lares-diagnostics-engine @ git+https://github.com/alexander-zimmermann/lares-diagnostics-engine@v1.42.0",
 ]
 
 [project.optional-dependencies]
@@ -47,6 +48,10 @@ lares-mcp-bridge = "lares_mcp_bridge.__main__:main"
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.hatch.metadata]
+# lares-diagnostics-engine is a git tag, not a PyPI release.
+allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/lares_mcp_bridge"]

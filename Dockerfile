@@ -5,7 +5,11 @@ ENV PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PYTHONDONTWRITEBYTECODE=1
 
-RUN pip install --no-cache-dir uv
+# git: the lares-diagnostics-engine dependency is a git tag, not a PyPI release.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends git \
+ && rm -rf /var/lib/apt/lists/* \
+ && pip install --no-cache-dir uv
 
 WORKDIR /build
 COPY pyproject.toml README.md LICENSE ./

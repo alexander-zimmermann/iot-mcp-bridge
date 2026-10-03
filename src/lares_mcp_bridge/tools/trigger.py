@@ -1,11 +1,12 @@
-"""Starting a use case now: the request carried to lares-agent-trigger.
+"""The requests carried to lares-agent-trigger: start a use case now, append to its memory.
 
 The trigger decides alone whether and how a run starts — it claims the
 ledger row, counts the day's budget and delivers the output where the use
-case says. This module only carries the request to the trigger's
-``POST /api/runs`` with the key both pods share, and hands back what the
+case says — and it is the only writer of a use case's memory. This module
+only carries a request to the trigger's API (``POST /api/runs``,
+``POST /api/memory``) with the key both pods share, and hands back what the
 trigger answered. A refusal comes back as an error in the trigger's own
-words, so the chat can say why nothing started.
+words, so the caller can say why nothing happened.
 
 One shared httpx client, opened in the app lifespan like the wiki's; the key
 arrives as a mounted Secret file.
@@ -58,8 +59,29 @@ async def close() -> None:
 
 def _require_client() -> httpx.AsyncClient:
     if _client is None:
-        raise RuntimeError("start_run is disabled — set MCP_TRIGGER_URL and MCP_TRIGGER_KEY_FILE")
+        raise RuntimeError(
+            "the trigger is not configured — set MCP_TRIGGER_URL and MCP_TRIGGER_KEY_FILE"
+        )
     return _client
+
+
+async def post(path: str, body: dict[str, Any], *, refusal: str) -> dict[str, Any]:
+    """POST ``body`` to the trigger's ``path`` and return its answer.
+
+    A 4xx is the trigger saying no: ``ValueError("<refusal>: <reason>")``. A
+    5xx or no answer at all is ``RuntimeError("trigger_unavailable: …")``.
+    """
+    try:
+        response = await _require_client().post(path, json=body)
+    except httpx.HTTPError as exc:
+        raise RuntimeError(f"trigger_unavailable: {exc}") from exc
+    reason = _reason(response)
+    if response.status_code >= 500:
+        raise RuntimeError(f"trigger_unavailable: {reason}")
+    if response.status_code >= 400:
+        raise ValueError(f"{refusal}: {reason}")
+    answer: dict[str, Any] = response.json()
+    return answer
 
 
 async def start_run(use_case: str, subject: str | None = None) -> dict[str, Any]:
@@ -67,16 +89,7 @@ async def start_run(use_case: str, subject: str | None = None) -> dict[str, Any]
     body: dict[str, Any] = {"use_case": use_case}
     if subject is not None:
         body["subject"] = subject
-    try:
-        response = await _require_client().post("/api/runs", json=body)
-    except httpx.HTTPError as exc:
-        raise RuntimeError(f"trigger_unavailable: {exc}") from exc
-    reason = _reason(response)
-    if response.status_code >= 500:
-        raise RuntimeError(f"trigger_unavailable: {reason}")
-    if response.status_code >= 400:
-        raise ValueError(f"run_not_started: {reason}")
-    answer: dict[str, Any] = response.json()
+    answer = await post("/api/runs", body, refusal="run_not_started")
     log.info("run_started", use_case=use_case, subject=subject, answer=answer)
     return answer
 

@@ -13,7 +13,11 @@ from lares_mcp_bridge import metrics as metrics_module
 from lares_mcp_bridge import server
 from lares_mcp_bridge.config import Settings
 
-ALLOWLIST = {"lares-agent": ["list_*", "get_*", "query_*"], "lares-runs": ["start_run"]}
+ALLOWLIST = {
+    "lares-agent": ["list_*", "get_episode", "query_*", "backtest_fault"],
+    "lares-runs": ["start_run"],
+    "lares-memory": ["get_memory", "append_memory"],
+}
 
 
 @pytest.fixture
@@ -53,8 +57,8 @@ async def test_machine_client_sees_only_its_allowlist(
     everything = await _visible_tools()
     structlog.contextvars.clear_contextvars()
     visible = await _visible_tools(client_id="lares-agent", client_kind="machine")
-    expected = {name for name in everything if name.startswith(("list_", "get_", "query_"))}
-    assert visible == expected
+    expected = {name for name in everything if name.startswith(("list_", "query_"))}
+    assert visible == expected | {"get_episode", "backtest_fault"}
     # The verdict is the owner's act and matches no pattern an agent holds.
     assert "set_verdict" not in visible
 
@@ -104,3 +108,16 @@ async def test_starting_a_run_is_a_client_of_its_own(
     assert await _visible_tools(client_id="lares-runs", client_kind="machine") == {"start_run"}
     structlog.contextvars.clear_contextvars()
     assert "start_run" not in await _visible_tools(client_id="lares-agent", client_kind="machine")
+
+
+async def test_memory_is_a_client_of_its_own(
+    policy_settings: Settings, clean_context: None
+) -> None:
+    """Only the runs that keep a memory hold it; the read client every run uses does not."""
+    assert await _visible_tools(client_id="lares-memory", client_kind="machine") == {
+        "get_memory",
+        "append_memory",
+    }
+    structlog.contextvars.clear_contextvars()
+    read = await _visible_tools(client_id="lares-agent", client_kind="machine")
+    assert {"get_memory", "append_memory"}.isdisjoint(read)

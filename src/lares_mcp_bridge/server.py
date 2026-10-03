@@ -39,10 +39,12 @@ from . import metrics as metrics_module
 from . import nats as nats_module
 from .config import Settings, load_settings
 from .logging_setup import configure_logging, get_logger
+from .tools import backtest as backtest_tools
 from .tools import domain as domain_tools
 from .tools import episodes as episode_tools
 from .tools import forecasts as forecasts_tools
 from .tools import live as live_tools
+from .tools import memory as memory_tools
 from .tools import presence as presence_tools
 from .tools import runs as run_tools
 from .tools import sources as sources_tools
@@ -562,6 +564,44 @@ async def set_verdict(
 
 
 @mcp.tool()
+async def backtest_fault(
+    candidate: dict[str, Any], weeks: int = 8, limit: int = 100
+) -> dict[str, Any]:
+    """What one candidate fault would have found in the last ``weeks`` — the
+    number a proposal to the fault list is reviewed by.
+
+    * ``candidate`` — one entry of the fault list, in its schema: a new fault,
+      or a copy of a declared one with a parameter moved (``name``,
+      ``sentence``, ``unit``, ``kind``, ``parameters``, ``scope``, ``target``)
+    * ``weeks`` — how far back to measure, in whole weeks off the newest
+      hourly bucket; at most what the fault's measurement can read (a year
+      for most kinds)
+    * ``limit`` — at most this many episodes in the list, positive, capped
+      like every row limit
+
+    Nothing is written: the engine runs the candidate through the same
+    schema, measurement and episode fold the detection job uses, read-only.
+    Returns ``fault``, ``kind`` and ``weeks`` as measured, ``episodes``
+    (oldest first: ``subject`` and ``label`` — the channel, device or room it
+    accuses — ``started_at``, ``ended_at``, ``severity``, ``peak_score`` in
+    the fault's own unit, ``observations``), ``episode_count`` (all of them,
+    ``truncated`` when the list was cut), ``window_start`` and ``frontier``
+    (the window measured) and ``measured`` (the measurement's own record:
+    how many channels the scope resolved to, how many were candidates — zero
+    episodes from a scope that matched nothing is not a quiet house).
+
+    The severities are those of a rule without history: a candidate has no
+    stored distribution to be rare against, so judge it by its peak score.
+    A candidate the engine cannot measure is refused with the reason, worded
+    the way a real edit of the fault list would fail: a schema error, an
+    ``external`` fault, a target form its kind does not deliver on, a window
+    past what it can read, a fault measured against the plant's expected
+    yield.
+    """
+    return await backtest_tools.backtest_fault(candidate, weeks, limit)
+
+
+@mcp.tool()
 async def get_current_state(
     domain: str,
     identifier: str | None = None,
@@ -662,6 +702,40 @@ async def start_run(use_case: str, subject: str | None = None) -> dict[str, Any]
     owner.
     """
     return await trigger_tools.start_run(use_case, subject)
+
+
+@mcp.tool()
+async def get_memory(use_case: str) -> dict[str, Any]:
+    """The working notes a use case keeps between its runs — read them at the
+    start of a run, before deciding anything they could change.
+
+    * ``use_case`` — the declared name, e.g. ``"propose-faults"``
+
+    Returns ``text`` (one entry per line, oldest first), ``bytes`` (what it
+    takes of the bound, about 8 KB) and ``updated_at``. A use case that has
+    written nothing yet reads as an empty ``text`` with ``updated_at`` null.
+    The memory is never a second truth for what the tables hold: an episode,
+    a run or a verdict is read where it is.
+    """
+    return await memory_tools.get_memory(use_case)
+
+
+@mcp.tool()
+async def append_memory(use_case: str, line: str) -> dict[str, Any]:
+    """Add one line to the end of a use case's memory, for its later runs to read.
+
+    * ``use_case`` — the declared name, e.g. ``"propose-faults"``
+    * ``line`` — one line that stands on its own, without line breaks: what
+      was decided, about what, and when (``"2026-10-04 rejected: silence
+      gap_factor 4 on Stromwert"``)
+
+    The memory is bounded to about 8 KB. When a line takes it past that, the
+    oldest lines fall away until it fits, so the newest line always stays. A
+    use case that keeps no memory, an empty line, a line break and a line
+    larger than the bound alone are refused with the reason. Returns the
+    ``bytes`` the memory now holds.
+    """
+    return await memory_tools.append_memory(use_case, line)
 
 
 @mcp.tool()

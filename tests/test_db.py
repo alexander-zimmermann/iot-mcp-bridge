@@ -5,6 +5,7 @@ from __future__ import annotations
 import psycopg
 import pytest
 from psycopg import sql
+from psycopg.rows import DictRow
 
 from lares_mcp_bridge import db
 from lares_mcp_bridge.config import Settings
@@ -125,3 +126,25 @@ async def test_lookup_parses_placeholders_even_without_params(db_pool: None) -> 
     # A literal percent sign has to be doubled — the same rule as read() and write().
     rows = await db.lookup("t", "_metadata", "SELECT format('%%s', 1) AS one")
     assert rows == [{"one": "1"}]
+
+
+async def test_blocking_read_hands_work_a_dict_row_connection(db_pool: None) -> None:
+    rows = await db.blocking_read(
+        "t", "knx", lambda conn: conn.execute("SELECT count(*) AS n FROM knx").fetchall()
+    )
+    assert rows == [{"n": 211}]
+
+
+async def test_blocking_read_cannot_write(db_pool: None) -> None:
+    def write(conn: psycopg.Connection[DictRow]) -> None:
+        conn.execute("DELETE FROM knx")
+
+    with pytest.raises(psycopg.errors.ReadOnlySqlTransaction):
+        await db.blocking_read("t", "knx", write)
+    rows = await db.lookup("t", "knx", "SELECT count(*) AS n FROM knx")
+    assert rows == [{"n": 211}]
+
+
+async def test_blocking_read_before_init_is_a_runtime_error() -> None:
+    with pytest.raises(RuntimeError, match="init_pool"):
+        await db.blocking_read("t", "knx", lambda _conn: None)

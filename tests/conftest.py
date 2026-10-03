@@ -4,16 +4,20 @@ from __future__ import annotations
 
 import os
 from collections.abc import AsyncIterator, Iterator
+from pathlib import Path
 from typing import LiteralString
 
 import psycopg
 import pytest
 import pytest_asyncio
+import respx
 from testcontainers.postgres import PostgresContainer
 
 from lares_mcp_bridge import db
 from lares_mcp_bridge.config import Settings
-from lares_mcp_bridge.tools import sources
+from lares_mcp_bridge.tools import sources, trigger
+
+from .support import TRIGGER_KEY, TRIGGER_URL, connect
 
 
 @pytest.fixture(autouse=True)
@@ -26,18 +30,6 @@ def _fresh_sources_cache() -> None:
 TIMESCALEDB_IMAGE = "timescale/timescaledb:latest-pg17"
 
 
-def _connect(container: PostgresContainer) -> psycopg.Connection:
-    """Open an autocommit connection to the running testcontainer."""
-    return psycopg.connect(
-        host=container.get_container_host_ip(),
-        port=int(container.get_exposed_port(5432)),
-        user="test",
-        password="test",
-        dbname="homelab",
-        autocommit=True,
-    )
-
-
 @pytest.fixture(scope="session")
 def timescaledb_container() -> Iterator[PostgresContainer]:
     container = PostgresContainer(
@@ -46,7 +38,7 @@ def timescaledb_container() -> Iterator[PostgresContainer]:
     container.start()
     try:
         # 1) Extension + tables + seed (regular DDL/DML, autocommit-safe).
-        conn = _connect(container)
+        conn = connect(container)
         try:
             conn.execute("CREATE EXTENSION IF NOT EXISTS timescaledb")
             _seed(conn)
@@ -57,7 +49,7 @@ def timescaledb_container() -> Iterator[PostgresContainer]:
         # run outside any transaction block — fresh connection per CAGG keeps
         # psycopg from wrapping them in an implicit BEGIN.
         for cagg_sql, refresh_sql in _CAGGS:
-            conn = _connect(container)
+            conn = connect(container)
             try:
                 conn.execute(cagg_sql)
                 conn.execute(refresh_sql)
@@ -703,6 +695,8 @@ _CAGGS: list[tuple[LiteralString, LiteralString]] = [
             time_bucket('1 hour', time) AS bucket,
             ga,
             avg(value)  AS value,
+            min(value)  AS min_value,
+            max(value)  AS max_value,
             count(*)    AS samples
         FROM knx
         GROUP BY bucket, ga
@@ -795,3 +789,34 @@ async def clean_verdicts(settings: Settings, db_pool: None) -> AsyncIterator[Non
     reset()
     yield
     reset()
+
+
+@pytest.fixture
+def trigger_key_file(tmp_path: Path) -> Path:
+    path = tmp_path / "trigger-api-key"
+    path.write_text(f"{TRIGGER_KEY}\n", encoding="utf-8")  # trailing newline, like a mounted Secret
+    return path
+
+
+@pytest_asyncio.fixture
+async def trigger_client(trigger_key_file: Path) -> AsyncIterator[None]:
+    settings = Settings(
+        db_host="localhost",
+        db_name="x",
+        db_username="x",
+        db_password="x",
+        nats_enabled=False,
+        trigger_url=TRIGGER_URL,
+        trigger_key_file=str(trigger_key_file),
+    )
+    await trigger.init(settings)
+    try:
+        yield
+    finally:
+        await trigger.close()
+
+
+@pytest.fixture
+def trigger_router() -> Iterator[respx.MockRouter]:
+    with respx.mock(base_url=TRIGGER_URL, assert_all_called=False) as mock:
+        yield mock
