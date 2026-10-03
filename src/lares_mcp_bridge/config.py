@@ -83,6 +83,25 @@ class Settings(BaseSettings):
     # alone is a config error); the API key arrives as a mounted Secret file.
     wikijs_url: str | None = None
     wikijs_token_file: str | None = None
+    # The one wiki write, under a key of its own whose group may write pages;
+    # it needs the URL above. A page it creates lives in this locale, and an
+    # existing page is looked up there.
+    wikijs_write_token_file: str | None = None
+    wikijs_locale: str = "de"
+
+    # Proxmox Backup Server: the backup tools read through an API token with
+    # the Audit role. All three must be set (a part alone is a config error);
+    # the token id is `<user>@<realm>!<token name>`, its secret a mounted file.
+    pbs_url: str | None = None
+    pbs_token_id: str | None = None
+    pbs_token_file: str | None = None
+
+    # S3 object store: the storage tools list buckets and objects with a key
+    # whose policy allows listing and nothing else. All three must be set (a
+    # part alone is a config error); both key halves arrive as mounted files.
+    s3_endpoint_url: str | None = None
+    s3_access_key_file: str | None = None
+    s3_secret_key_file: str | None = None
 
     # lares-agent-trigger: where start_run carries its request. Both must be
     # set (one alone is a config error); the key both pods share arrives as a
@@ -148,6 +167,31 @@ class Settings(BaseSettings):
         return self
 
     @model_validator(mode="after")
+    def _check_wikijs_write_config(self) -> Settings:
+        if self.wikijs_write_token_file and not self.wikijs_url:
+            raise ValueError("MCP_WIKIJS_WRITE_TOKEN_FILE needs MCP_WIKIJS_URL")
+        return self
+
+    @model_validator(mode="after")
+    def _check_pbs_config(self) -> Settings:
+        parts = (self.pbs_url, self.pbs_token_id, self.pbs_token_file)
+        if any(parts) and not all(parts):
+            raise ValueError(
+                "MCP_PBS_URL, MCP_PBS_TOKEN_ID and MCP_PBS_TOKEN_FILE must be set together"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _check_s3_config(self) -> Settings:
+        parts = (self.s3_endpoint_url, self.s3_access_key_file, self.s3_secret_key_file)
+        if any(parts) and not all(parts):
+            raise ValueError(
+                "MCP_S3_ENDPOINT_URL, MCP_S3_ACCESS_KEY_FILE and MCP_S3_SECRET_KEY_FILE"
+                " must be set together"
+            )
+        return self
+
+    @model_validator(mode="after")
     def _check_trigger_config(self) -> Settings:
         if bool(self.trigger_url) != bool(self.trigger_key_file):
             raise ValueError("MCP_TRIGGER_URL and MCP_TRIGGER_KEY_FILE must be set together")
@@ -175,6 +219,18 @@ class Settings(BaseSettings):
     @property
     def wikijs_enabled(self) -> bool:
         return bool(self.wikijs_url and self.wikijs_token_file)
+
+    @property
+    def wikijs_write_enabled(self) -> bool:
+        return bool(self.wikijs_url and self.wikijs_write_token_file)
+
+    @property
+    def pbs_enabled(self) -> bool:
+        return bool(self.pbs_url and self.pbs_token_id and self.pbs_token_file)
+
+    @property
+    def s3_enabled(self) -> bool:
+        return bool(self.s3_endpoint_url and self.s3_access_key_file and self.s3_secret_key_file)
 
     @property
     def trigger_enabled(self) -> bool:

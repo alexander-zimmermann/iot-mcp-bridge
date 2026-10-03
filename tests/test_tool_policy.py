@@ -17,6 +17,7 @@ ALLOWLIST = {
     "lares-agent": ["list_*", "get_episode", "query_*", "backtest_fault"],
     "lares-runs": ["start_run"],
     "lares-memory": ["get_memory", "append_memory"],
+    "lares-wiki": ["update_wiki_page"],
 }
 
 
@@ -121,3 +122,23 @@ async def test_memory_is_a_client_of_its_own(
     structlog.contextvars.clear_contextvars()
     read = await _visible_tools(client_id="lares-agent", client_kind="machine")
     assert {"get_memory", "append_memory"}.isdisjoint(read)
+
+
+async def test_writing_the_wiki_is_a_client_of_its_own(
+    policy_settings: Settings, clean_context: None
+) -> None:
+    """Only the runs that write the wiki hold the write; the read client every run uses does not."""
+    assert await _visible_tools(client_id="lares-wiki", client_kind="machine") == {
+        "update_wiki_page"
+    }
+    structlog.contextvars.clear_contextvars()
+    read = await _visible_tools(client_id="lares-agent", client_kind="machine")
+    assert "update_wiki_page" not in read
+    # The backup and storage reads are reads: the read client holds them through `list_*`.
+    assert {
+        "list_pbs_datastores",
+        "list_pbs_snapshots",
+        "list_pbs_tasks",
+        "list_s3_buckets",
+        "list_s3_objects",
+    } <= read

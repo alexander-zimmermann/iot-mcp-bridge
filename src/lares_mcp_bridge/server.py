@@ -45,8 +45,10 @@ from .tools import episodes as episode_tools
 from .tools import forecasts as forecasts_tools
 from .tools import live as live_tools
 from .tools import memory as memory_tools
+from .tools import pbs as pbs_tools
 from .tools import presence as presence_tools
 from .tools import runs as run_tools
+from .tools import s3 as s3_tools
 from .tools import sources as sources_tools
 from .tools import timeseries as timeseries_tools
 from .tools import trigger as trigger_tools
@@ -775,6 +777,155 @@ async def list_wiki_pages() -> dict[str, Any]:
     return await wiki_tools.list_wiki_pages()
 
 
+@mcp.tool()
+async def update_wiki_page(path: str, content: str, title: str) -> dict[str, Any]:
+    """Write one page of the house wiki: create it at ``path`` or replace the
+    content and title of the page already there.
+
+    * ``path`` — where the page lives, as ``list_wiki_pages`` shows paths
+      (e.g. ``"haus/wartungsplan"``); no dots or spaces
+    * ``content`` — the whole page in Markdown, not a diff: what is not in it
+      is gone from the page
+    * ``title`` — the page title
+
+    A page that exists keeps its description, tags and whether it is
+    published (a publish window set in the editor is cleared); a new one is
+    published, without tags. Every update leaves the previous revision in the
+    page's history, where a person can restore it. Read the page with
+    ``get_wiki_page`` first when changing one. Returns ``action``
+    (``created`` / ``updated``), ``id``, ``path``, ``locale``, ``title`` and
+    ``updated_at``; a path the key may not write is refused with the wiki's
+    reason.
+    """
+    return await wiki_tools.update_wiki_page(path=path, content=content, title=title)
+
+
+@mcp.tool()
+async def list_pbs_datastores() -> dict[str, Any]:
+    """The backup server's datastores, each with whether its backups were
+    checked — start here for "do the backups work?".
+
+    Per datastore: ``name`` (what ``list_pbs_snapshots`` takes),
+    ``total_bytes`` / ``used_bytes`` / ``avail_bytes``, ``estimated_full_at``
+    (a linear guess over the last month; a date in the past means usage is
+    flat or falling), ``error`` when the server cannot open it, ``gc`` (the
+    garbage collection: ``schedule``, ``last_run_state``,
+    ``last_run_ended_at``, ``next_run_at``, ``removed_bytes``,
+    ``pending_bytes``, ``still_bad_chunks``; ``null`` when the datastore has
+    no garbage-collection job) and ``verify_jobs`` (``id``, ``schedule``,
+    ``last_run_state``, ``last_run_ended_at``, ``next_run_at``,
+    ``last_run_upid``; empty when none is set up).
+
+    A ``last_run_state`` is ``"OK"``, ``"WARNINGS: <n>"`` or the error
+    itself; ``null`` means the job never finished a run — not a success.
+    """
+    return await pbs_tools.list_pbs_datastores()
+
+
+@mcp.tool()
+async def list_pbs_snapshots(
+    datastore: str,
+    backup_type: str | None = None,
+    backup_id: str | None = None,
+    limit: int = 100,
+) -> dict[str, Any]:
+    """The snapshots of one backup datastore, newest first, each with its
+    last verification.
+
+    * ``datastore`` — a ``name`` from ``list_pbs_datastores``
+    * ``backup_type`` — ``"vm"``, ``"ct"`` or ``"host"``
+    * ``backup_id`` — the guest's id (``"105"``); with ``backup_type`` the
+      snapshots of one guest
+    * ``limit`` — at most this many snapshots in the list, positive, capped
+      like every row limit
+
+    Each snapshot: ``backup_type``, ``backup_id``, ``backup_time``,
+    ``size_bytes``, ``verification`` (``"ok"``, ``"failed"`` or ``null`` for
+    never verified) with ``verify_upid`` (its task in ``list_pbs_tasks``),
+    ``protected``, ``owner``, ``comment``. ``counts`` (``ok``, ``failed``,
+    ``unverified``) and ``snapshot_count`` cover every matching snapshot, the
+    cut ones too; ``truncated`` says the list was cut.
+    """
+    return await pbs_tools.list_pbs_snapshots(
+        datastore=datastore, backup_type=backup_type, backup_id=backup_id, limit=limit
+    )
+
+
+@mcp.tool()
+async def list_pbs_tasks(
+    task_type: str | None = None,
+    datastore: str | None = None,
+    errors_only: bool = False,
+    days: int = 7,
+    limit: int = 50,
+) -> dict[str, Any]:
+    """The backup server's task log, newest first — what ran, and how it ended.
+
+    * ``task_type`` — part of the task type: ``"backup"``, ``"verif"``
+      (``verify`` and ``verificationjob``), ``"garbage_collection"``,
+      ``"prune"``, ``"syncjob"``
+    * ``datastore`` — only tasks on that datastore
+    * ``errors_only=True`` — only tasks that ended in an error or warnings
+    * ``days`` — window in days, by start, positive
+    * ``limit`` — at most this many tasks, positive, capped like every row
+      limit; ``truncated`` says more matched
+
+    Each task: ``upid``, ``type``, ``target`` (e.g. the datastore and job, or
+    the guest a backup was of), ``user``, ``started_at``, ``ended_at``,
+    ``running`` and ``status`` (``"OK"``, ``"WARNINGS: <n>"`` or the error;
+    ``null`` while running).
+    """
+    return await pbs_tools.list_pbs_tasks(
+        task_type=task_type,
+        datastore=datastore,
+        errors_only=errors_only,
+        days=days,
+        limit=limit,
+    )
+
+
+@mcp.tool()
+async def list_s3_buckets() -> dict[str, Any]:
+    """The buckets of the house's S3 object store — the database and volume
+    backups and the cold archive — each with how full and how fresh it is.
+
+    Per bucket, in name order: ``name``, ``created_at``, ``object_count``,
+    ``size_bytes``, ``newest_key`` and ``newest_at`` (the object written last
+    — today's date there means today's backup arrived), ``oldest_at``. An
+    empty bucket has ``object_count`` 0 and no times.
+
+    ``nats-archive`` and ``influxdb-archive`` are the long-term history and
+    exist nowhere else; the ``*-backups`` buckets are copies of a living
+    source. Every object of every bucket is listed to find the newest, so a
+    call takes a few seconds. Only listings are read, never an object.
+    """
+    return await s3_tools.list_s3_buckets()
+
+
+@mcp.tool()
+async def list_s3_objects(bucket: str, prefix: str = "", limit: int = 100) -> dict[str, Any]:
+    """The objects of one bucket under a key prefix, newest first, with the
+    next level of the key tree summed up.
+
+    * ``bucket`` — a ``name`` from ``list_s3_buckets``
+    * ``prefix`` — keys starting with it, e.g. ``"knx/"`` in
+      ``nats-archive`` or ``"timescaledb-db/base/"`` in
+      ``timescaledb-backups``; empty for the whole bucket
+    * ``limit`` — at most this many objects in the list, positive, capped
+      like every row limit
+
+    Returns ``object_count``, ``size_bytes``, ``newest_key``, ``newest_at``
+    and ``oldest_at`` over everything under the prefix; ``children``, one
+    row per next ``/``-level below the prefix (a stream of the archive, a
+    backup of a database) with its own count, size and newest object — a
+    child whose ``newest_at`` lags behind its siblings stopped writing; and
+    ``objects`` (``key``, ``size_bytes``, ``last_modified``), newest first,
+    ``truncated`` when cut. A prefix nothing matches is an empty listing, an
+    unknown bucket an error naming ``list_s3_buckets``.
+    """
+    return await s3_tools.list_s3_objects(bucket=bucket, prefix=prefix, limit=limit)
+
+
 _settings: Settings | None = None
 
 
@@ -830,6 +981,12 @@ def build_app() -> Starlette:
             await nats_module.init(_settings)
         if _settings.wikijs_enabled:
             await wiki_tools.init(_settings)
+        if _settings.wikijs_write_enabled:
+            await wiki_tools.init_writer(_settings)
+        if _settings.pbs_enabled:
+            await pbs_tools.init(_settings)
+        if _settings.s3_enabled:
+            await s3_tools.init(_settings)
         if _settings.trigger_enabled:
             await trigger_tools.init(_settings)
         metrics_server, metrics_thread = metrics_module.serve(
@@ -843,6 +1000,9 @@ def build_app() -> Starlette:
             auth_enabled=_settings.auth_enabled,
             nats_enabled=_settings.nats_enabled,
             wikijs_enabled=_settings.wikijs_enabled,
+            wikijs_write_enabled=_settings.wikijs_write_enabled,
+            pbs_enabled=_settings.pbs_enabled,
+            s3_enabled=_settings.s3_enabled,
             trigger_enabled=_settings.trigger_enabled,
         )
         try:
@@ -852,6 +1012,8 @@ def build_app() -> Starlette:
             metrics_server.shutdown()
             metrics_thread.join()
             await wiki_tools.close()
+            await pbs_tools.close()
+            await s3_tools.close()
             await trigger_tools.close()
             await nats_module.close()
             await db.close_pool()

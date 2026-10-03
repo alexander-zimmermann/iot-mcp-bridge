@@ -47,6 +47,12 @@ EXPECTED_TOOLS = {
     "search_wiki",
     "get_wiki_page",
     "list_wiki_pages",
+    "update_wiki_page",
+    "list_pbs_datastores",
+    "list_pbs_snapshots",
+    "list_pbs_tasks",
+    "list_s3_buckets",
+    "list_s3_objects",
 }
 
 
