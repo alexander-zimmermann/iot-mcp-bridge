@@ -607,6 +607,25 @@ LEFT JOIN episode_verdicts v ON v.episode_id = r.id;
             ON agent_runs (use_case, subject_kind, subject_key)
         """
     )
+
+    # Verbatim from bootstrap.sql, like episode_view: the bridge and the
+    # dashboard pick an episode's explanation through it.
+    conn.execute(
+        """
+CREATE OR REPLACE VIEW episode_explanation_view AS
+SELECT DISTINCT ON (episode_id)
+       -- Inside CASE, so a filter pushed into the view never casts a chat key.
+       CASE WHEN r.subject_kind = 'episode'
+            THEN split_part(r.subject_key, ':', 1)::bigint
+       END AS episode_id,
+       r.id AS run_id, r.tldr, r.text, r.created_at
+FROM agent_runs r
+WHERE r.subject_kind = 'episode'
+  AND r.status = 'completed'
+  AND r.tldr IS NOT NULL
+ORDER BY episode_id, r.created_at DESC;
+        """
+    )
     conn.execute(
         """
         CREATE TABLE agent_memory (
