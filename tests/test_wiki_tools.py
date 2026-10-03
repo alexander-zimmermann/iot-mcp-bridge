@@ -1,14 +1,16 @@
 """Wiki-tool tests against a respx-mocked Wiki.js.
 
 Unit tests of the two GraphQL reads, the by-id / by-path resolution through
-``pages.list``, and the source-view scrape that stands in for the
-``manage:pages``-guarded ``pages.single``. Nothing here needs the database.
+``pages.list``, the source-view scrape that stands in for the
+``manage:pages``-guarded ``pages.single``, and the one write under its own
+key. Nothing here needs the database.
 """
 
 from __future__ import annotations
 
 import json
-from collections.abc import AsyncIterator, Iterator
+import re
+from collections.abc import AsyncIterator, Callable, Iterator
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +24,7 @@ from lares_mcp_bridge.tools import wiki
 
 WIKI_URL = "http://wiki-js.wiki-js.svc"
 TOKEN = "eyJhbGciOiJSUzI1NiJ9.test.token"
+WRITE_TOKEN = "eyJhbGciOiJSUzI1NiJ9.write.token"
 
 _LOGIC_BLOCKS = {
     "id": 12,
@@ -47,7 +50,11 @@ _HOME = {
 }
 
 
-def _settings(wikijs_url: str | None = None, wikijs_token_file: str | None = None) -> Settings:
+def _settings(
+    wikijs_url: str | None = None,
+    wikijs_token_file: str | None = None,
+    wikijs_write_token_file: str | None = None,
+) -> Settings:
     return Settings(
         db_host="localhost",
         db_name="x",
@@ -57,6 +64,7 @@ def _settings(wikijs_url: str | None = None, wikijs_token_file: str | None = Non
         nats_enabled=False,
         wikijs_url=wikijs_url,
         wikijs_token_file=wikijs_token_file,
+        wikijs_write_token_file=wikijs_write_token_file,
     )
 
 
@@ -85,6 +93,28 @@ def token_file(tmp_path: Path) -> Path:
 @pytest_asyncio.fixture
 async def wiki_client(token_file: Path) -> AsyncIterator[None]:
     await wiki.init(_settings(wikijs_url=WIKI_URL, wikijs_token_file=str(token_file)))
+    try:
+        yield
+    finally:
+        await wiki.close()
+
+
+@pytest.fixture
+def write_token_file(tmp_path: Path) -> Path:
+    path = tmp_path / "wikijs-write-token"
+    path.write_text(f"{WRITE_TOKEN}\n", encoding="utf-8")
+    return path
+
+
+@pytest_asyncio.fixture
+async def wiki_writer(token_file: Path, write_token_file: Path) -> AsyncIterator[None]:
+    await wiki.init_writer(
+        _settings(
+            wikijs_url=WIKI_URL,
+            wikijs_token_file=str(token_file),
+            wikijs_write_token_file=str(write_token_file),
+        )
+    )
     try:
         yield
     finally:
@@ -322,3 +352,213 @@ async def test_http_errors_propagate(wiki_client: None, router: respx.MockRouter
 
     with pytest.raises(httpx.HTTPStatusError):
         await wiki.search_wiki("anything")
+
+
+# ---------------------------------------------------------------- update_wiki_page
+
+
+def _write_list(*entries: dict[str, Any]) -> httpx.Response:
+    """``pages.list`` as the write key sees it, with the fields an update carries over."""
+    return _graphql({"list": list(entries)})
+
+
+def _wiki(
+    listed: httpx.Response, action: str, row: dict[str, Any]
+) -> Callable[[httpx.Request], httpx.Response]:
+    """Wiki.js answering the lookup with ``listed`` and the write with ``row``.
+
+    ``row`` is the raw page row ``createPage``/``updatePage`` return: it carries
+    ``localeCode``, never ``locale``. A selected field the row lacks fails as
+    Wiki.js fails it — the write stands, the answer is an error.
+    """
+
+    def answer(request: httpx.Request) -> httpx.Response:
+        query = json.loads(request.content)["query"]
+        if "list(" in query:
+            return listed
+        selection = re.search(r"page \{([^}]*)\}", query)
+        assert selection is not None
+        missing = [field for field in selection.group(1).split() if field not in row]
+        status = {"succeeded": True, "errorCode": 0, "slug": "ok", "message": "ok"}
+        if missing:
+            errors = [
+                {"message": f"Cannot return null for non-nullable field Page.{field}."}
+                for field in missing
+            ]
+            result = {"responseResult": status, "page": None}
+            return httpx.Response(200, json={"errors": errors, "data": {"pages": {action: result}}})
+        page = {field: row[field] for field in selection.group(1).split()}
+        return httpx.Response(
+            200, json={"data": {"pages": {action: {"responseResult": status, "page": page}}}}
+        )
+
+    return answer
+
+
+def _row(page_id: int, path: str, title: str, updated_at: str) -> dict[str, Any]:
+    return {
+        "id": page_id,
+        "path": path,
+        "title": title,
+        "localeCode": "de",
+        "updatedAt": updated_at,
+    }
+
+
+def _graphql_bodies(router: respx.MockRouter) -> list[dict[str, Any]]:
+    return [json.loads(call.request.content) for call in router.calls]
+
+
+def test_the_write_key_needs_the_wiki_url(write_token_file: Path) -> None:
+    with pytest.raises(ValueError, match="MCP_WIKIJS_WRITE_TOKEN_FILE needs MCP_WIKIJS_URL"):
+        _settings(wikijs_write_token_file=str(write_token_file))
+
+
+def test_writes_enabled_only_with_the_write_key(token_file: Path, write_token_file: Path) -> None:
+    reads = _settings(wikijs_url=WIKI_URL, wikijs_token_file=str(token_file))
+    assert reads.wikijs_write_enabled is False
+    writes = _settings(
+        wikijs_url=WIKI_URL,
+        wikijs_token_file=str(token_file),
+        wikijs_write_token_file=str(write_token_file),
+    )
+    assert writes.wikijs_write_enabled
+
+
+async def test_writes_refuse_when_not_initialised(wiki_client: None) -> None:
+    with pytest.raises(RuntimeError, match="MCP_WIKIJS_WRITE_TOKEN_FILE"):
+        await wiki.update_wiki_page("haus/wartungsplan", "# Plan", "Wartungsplan")
+
+
+async def test_a_new_path_is_created_with_the_write_key(
+    wiki_writer: None, router: respx.MockRouter
+) -> None:
+    row = _row(31, "haus/wartungsplan", "Wartungsplan", "2026-10-03T08:00:00.000Z")
+    router.post("/graphql").mock(side_effect=_wiki(_write_list(), "create", row))
+
+    out = await wiki.update_wiki_page("/haus/wartungsplan/", "# Plan\n", "Wartungsplan")
+
+    assert out == {
+        "action": "created",
+        "id": 31,
+        "path": "haus/wartungsplan",
+        "locale": "de",
+        "title": "Wartungsplan",
+        "updated_at": "2026-10-03T08:00:00.000Z",
+    }
+    assert all(
+        call.request.headers["authorization"] == f"Bearer {WRITE_TOKEN}" for call in router.calls
+    )
+    listed, created = _graphql_bodies(router)
+    # The page is looked up in the one locale writes go to.
+    assert listed["variables"] == {"locale": "de"}
+    assert "create(" in created["query"]
+    assert created["variables"] == {
+        "content": "# Plan\n",
+        "locale": "de",
+        "path": "haus/wartungsplan",
+        "title": "Wartungsplan",
+    }
+
+
+async def test_an_existing_page_keeps_description_tags_and_publication(
+    wiki_writer: None, router: respx.MockRouter
+) -> None:
+    existing = {
+        "id": 12,
+        "path": "basalte/logic-blocks",
+        "locale": "de",
+        "title": "Basalte Logic Blocks",
+        "description": "Reference of the Studio logic blocks",
+        "isPublished": True,
+        "tags": ["basalte", "reference"],
+    }
+    other_page = {**existing, "id": 1, "path": "home", "tags": []}
+    row = _row(12, "basalte/logic-blocks", "Logikblöcke", "2026-10-03T08:05:00.000Z")
+    router.post("/graphql").mock(
+        side_effect=_wiki(_write_list(other_page, existing), "update", row)
+    )
+
+    out = await wiki.update_wiki_page("basalte/logic-blocks", "# Neu", "Logikblöcke")
+
+    assert out["action"] == "updated"
+    assert out["id"] == 12
+    assert out["title"] == "Logikblöcke"
+    _, updated = _graphql_bodies(router)
+    assert "update(" in updated["query"]
+    # Wiki.js resets what an update leaves out: an omitted publish flag
+    # unpublishes the page, omitted tags break the update.
+    assert updated["variables"] == {
+        "id": 12,
+        "content": "# Neu",
+        "title": "Logikblöcke",
+        "description": "Reference of the Studio logic blocks",
+        "isPublished": True,
+        "tags": ["basalte", "reference"],
+    }
+
+
+async def test_a_refused_write_raises_with_the_wikis_reason(
+    wiki_writer: None, router: respx.MockRouter
+) -> None:
+    refused = {
+        "responseResult": {
+            "succeeded": False,
+            "errorCode": 6010,
+            "slug": "PageDeleteForbidden",
+            "message": "You are not authorized to delete this page.",
+        },
+        "page": None,
+    }
+    router.post("/graphql").mock(
+        side_effect=[
+            _write_list(),
+            httpx.Response(200, json={"data": {"pages": {"create": refused}}}),
+        ]
+    )
+
+    with pytest.raises(wiki.WikiError, match="PageDeleteForbidden.*not authorized"):
+        await wiki.update_wiki_page("system/secrets", "x", "x")
+
+
+async def test_a_key_without_write_rights_is_forbidden(
+    wiki_writer: None, router: respx.MockRouter
+) -> None:
+    router.post("/graphql").mock(
+        side_effect=[
+            _write_list(),
+            httpx.Response(
+                200,
+                json={
+                    "errors": [{"message": "Forbidden", "path": ["pages", "create"]}],
+                    "data": {"pages": {"create": None}},
+                },
+            ),
+        ]
+    )
+
+    with pytest.raises(wiki.WikiError, match="Forbidden"):
+        await wiki.update_wiki_page("haus/wartungsplan", "# Plan", "Wartungsplan")
+
+
+async def test_a_page_without_a_description_keeps_none(
+    wiki_writer: None, router: respx.MockRouter
+) -> None:
+    existing = {
+        "id": 7,
+        "path": "haus/notizen",
+        "locale": "de",
+        "description": None,
+        "isPublished": False,
+        "tags": [],
+    }
+    row = _row(7, "haus/notizen", "Notizen", "2026-10-03T08:10:00.000Z")
+    router.post("/graphql").mock(side_effect=_wiki(_write_list(existing), "update", row))
+
+    out = await wiki.update_wiki_page("haus/notizen", "# Notizen", "Notizen")
+
+    assert out["action"] == "updated"
+    _, updated = _graphql_bodies(router)
+    # Carried over as it is, a draft stays a draft.
+    assert updated["variables"]["description"] is None
+    assert updated["variables"]["isPublished"] is False

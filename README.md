@@ -81,19 +81,55 @@ behind high-level questions:
 | `get_current_knx(room, function, name, …)`    | Current value per matching KNX group address with its role (status / command / reading) — answers "which lights are on right now?". |
 | `subscribe_nats(subject, duration_seconds)`   | Tails an allowlisted NATS subject for a short bounded window.                                                  |
 
-**Wiki** (the house's human-written references in [Wiki.js](https://js.wiki/); requires `MCP_WIKIJS_URL` + `MCP_WIKIJS_TOKEN_FILE`)
+**Wiki** (the house's human-written references in [Wiki.js](https://js.wiki/); the reads require `MCP_WIKIJS_URL` + `MCP_WIKIJS_TOKEN_FILE`, the write additionally `MCP_WIKIJS_WRITE_TOKEN_FILE`)
 
-| Tool                                | What it does                                                                                                        |
-| ----------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| `search_wiki(query)`                | Title/description/path search (`pages.search`); returns ids and paths to read.                                      |
-| `get_wiki_page(path \| page_id)`    | One page in full — raw Markdown `content` plus title, tags and dates. Locale comes from the page, never hardcoded.  |
-| `list_wiki_pages()`                 | The table of contents (`pages.list`): id, path, locale, title, description, `updated_at` of every readable page.     |
+| Tool                                   | What it does                                                                                                        |
+| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `search_wiki(query)`                   | Title/description/path search (`pages.search`); returns ids and paths to read.                                      |
+| `get_wiki_page(path \| page_id)`       | One page in full — raw Markdown `content` plus title, tags and dates. Locale comes from the page, never hardcoded.  |
+| `list_wiki_pages()`                    | The table of contents (`pages.list`): id, path, locale, title, description, `updated_at` of every readable page.     |
+| `update_wiki_page(path, content, title)` | Creates the page at `path` in `MCP_WIKIJS_LOCALE`, or replaces content and title of the page there. An update keeps the page's description, tags and publish flag (a publish window set in the editor is cleared); the previous revision stays in the page's history. |
 
-The wiki key is read-only by construction: its Wiki.js group carries exactly
+The read key is read-only by construction: its Wiki.js group carries exactly
 `read:pages` and `read:source`. Wiki.js 2.x guards the GraphQL `pages.single` /
 `pages.singleByPath` queries with the `manage:pages` *edit* permission, so page
 content is read from the source view (`GET /s/<locale>/<path>`, `read:source`)
-instead — the one read-only route to raw content. There is no write tool.
+instead — the one read-only route to raw content.
+
+The write runs under a second key whose group carries `read:pages` and
+`write:pages` and nothing else — no delete, no move, no styles or scripts. It
+is meant for a machine client of its own whose allowlist holds
+`update_wiki_page` only, so no run that only reads ever holds it. Wiki.js
+resets whatever an update leaves out (an omitted publish flag unpublishes the
+page, omitted tags fail the update), so the tool reads the page's row first and
+carries those fields over. A write answers with the raw page row, which has
+`localeCode` and no `locale`, so the tool never selects `locale` there and
+reports the configured one.
+
+**Backups** (the [Proxmox Backup Server](https://pbs.proxmox.com/); requires `MCP_PBS_URL` + `MCP_PBS_TOKEN_ID` + `MCP_PBS_TOKEN_FILE`)
+
+| Tool                                                       | What it does                                                                                       |
+| ---------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| `list_pbs_datastores()`                                    | Every datastore with its usage and fill estimate, its garbage collection and its verify jobs, each job with its last run's state and end and its next run. A job that never ran reads as `null`, never as a success. |
+| `list_pbs_snapshots(datastore, backup_type, backup_id, limit)` | One datastore's snapshots, newest first, each with the state of its last verification (`ok` / `failed` / `null`) and its verify task; `counts` over every matching snapshot. |
+| `list_pbs_tasks(task_type, datastore, errors_only, days, limit)` | The node's task log: backups, verifications, garbage collection, prune and sync, with start, end and end state. |
+
+The token has the `Audit` role on `/`, like the Prometheus exporter's: it sees
+every datastore, job and task and changes none of them. TLS is verified
+against the server's ACME certificate.
+
+**Storage** (the house's S3 object store: database and volume backups and the cold archive; requires `MCP_S3_ENDPOINT_URL` + `MCP_S3_ACCESS_KEY_FILE` + `MCP_S3_SECRET_KEY_FILE`)
+
+| Tool                                   | What it does                                                                                       |
+| -------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| `list_s3_buckets()`                    | Every bucket with its object count, size, newest object and oldest time — whether today's backup arrived. |
+| `list_s3_objects(bucket, prefix, limit)` | The objects under a key prefix, newest first, with the next `/`-level summed up per child (a stream of the archive, a backup of a database), so a child that stopped writing shows as one whose newest object lags. |
+
+The key's policy allows `s3:ListAllMyBuckets` and `s3:ListBucket` only: the
+tools read listings, never an object. They speak plain S3 (`ListBuckets`,
+`ListObjectsV2`), so a change of the service behind the endpoint leaves them
+as they are. S3 lists by key, not by time, so finding the newest object means
+listing all of it; both tools page through the whole listing.
 
 Later phases (tracked separately) add optimization advisors and
 approval-gated control.
@@ -175,6 +211,14 @@ All settings are environment variables, prefixed with `MCP_`:
 | `MCP_SUBSCRIBE_MAX_SECONDS`          | `30`                        | Hard cap for `subscribe_nats` windows                          |
 | `MCP_WIKIJS_URL`                     | —                           | Wiki.js base URL; with the token file enables the wiki tools   |
 | `MCP_WIKIJS_TOKEN_FILE`              | —                           | Read-only Wiki.js API key from a mounted file                  |
+| `MCP_WIKIJS_WRITE_TOKEN_FILE`        | —                           | Wiki.js API key with `write:pages`; enables `update_wiki_page` |
+| `MCP_WIKIJS_LOCALE`                  | `de`                        | Locale `update_wiki_page` looks pages up in and creates them in |
+| `MCP_PBS_URL`                        | —                           | Proxmox Backup Server base URL (`https://<host>:8007`)         |
+| `MCP_PBS_TOKEN_ID`                   | —                           | API token id, `<user>@<realm>!<token name>`                    |
+| `MCP_PBS_TOKEN_FILE`                 | —                           | The token's secret from a mounted file                         |
+| `MCP_S3_ENDPOINT_URL`                | —                           | S3 endpoint of the object store (path-style, SigV4)            |
+| `MCP_S3_ACCESS_KEY_FILE`             | —                           | Access key id of a list-only key, from a mounted file          |
+| `MCP_S3_SECRET_KEY_FILE`             | —                           | Its secret key, from a mounted file                            |
 | `MCP_TRIGGER_URL`                    | —                           | lares-agent-trigger base URL; with the key file enables `start_run` and `append_memory` |
 | `MCP_TRIGGER_KEY_FILE`               | —                           | The key the trigger's API takes, from a mounted file           |
 
@@ -185,7 +229,7 @@ An agent that cannot run an OAuth flow authenticates with a static API key inste
 ### Operational endpoints
 
 - `GET /livez` — liveness: process is up; never depends on DB/NATS health.
-- `GET /healthz` — readiness/deep health: 503 when the database is unreachable; reports NATS connectivity when the live tools are enabled. The wiki is never part of it — a wiki outage fails the wiki tools, not the pod.
+- `GET /healthz` — readiness/deep health: 503 when the database is unreachable; reports NATS connectivity when the live tools are enabled. Neither the wiki, the backup server nor the object store is part of it — their outage fails their tools, not the pod.
 - `GET :9090/metrics` — Prometheus metrics (tool calls, DB query durations, JWKS refreshes, NATS fetches).
 
 ### Container image
@@ -222,7 +266,7 @@ uv run mypy src
 uv run pytest -q
 ```
 
-Tests use [`testcontainers`](https://testcontainers-python.readthedocs.io/) to spin up a real TimescaleDB instance — no DB mocks.
+Tests use [`testcontainers`](https://testcontainers-python.readthedocs.io/) to spin up a real TimescaleDB instance — no DB mocks — and a real rustfs for the storage tools; external HTTP (Wiki.js, the backup server, the trigger, JWKS) is faked with `respx`.
 
 ## License
 
