@@ -686,16 +686,21 @@ async def get_current_knx(
 
 
 @mcp.tool()
-async def start_run(use_case: str, subject: str | None = None) -> dict[str, Any]:
+async def start_run(
+    use_case: str, subject: str | None = None, focus: str | None = None
+) -> dict[str, Any]:
     """Start a declared use case now, as a run of its own — only when the
     owner asks for one in so many words: "Starte die Erklärung zu Episode
-    15510", "lass Propose jetzt laufen". A question — why something happened,
-    what an episode means — is answered in this conversation instead, never by
-    starting a run.
+    15510", "lass Propose jetzt laufen", "schlag einen Fault für den Trockner
+    vor". A question — why something happened, what an episode means — is
+    answered in this conversation instead, never by starting a run.
 
     * ``use_case`` — the declared name, e.g. ``"explain-episode"``
     * ``subject`` — what the run is about: the episode id for a use case that
       runs on an episode (``"15510"``); left out for one that runs on a schedule
+    * ``focus`` — for a use case that runs on a schedule, what the owner asked
+      it to look at, in the owner's words (``"ein Fault für den Trockner"``);
+      left out when the owner named nothing
 
     The run does not answer here. Its output goes where the use case delivers
     — ``output`` in the reply names the targets, e.g. Discord and mail — and
@@ -706,7 +711,7 @@ async def start_run(use_case: str, subject: str | None = None) -> dict[str, Any]
     and a schedule's job a person paused; the error says which, so tell the
     owner.
     """
-    return await trigger_tools.start_run(use_case, subject)
+    return await trigger_tools.start_run(use_case, subject, focus)
 
 
 @mcp.tool()

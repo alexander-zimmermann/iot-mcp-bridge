@@ -69,7 +69,7 @@ behind high-level questions:
 
 | Tool                          | What it does                                                                                                   |
 | ----------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| `start_run(use_case, subject)` | Asks the trigger to start a declared use case now: on an episode (`subject` = the episode id) or, for a schedule use case, its cron job. The trigger claims the ledger row, counts the day's budget and delivers the output where the use case says; the tool hands back its answer (`run_id` or `job_id`, the `output` targets) or its reason for refusing. Meant for the chat only: its own machine client, so no run the platform starts holds it. |
+| `start_run(use_case, subject, focus)` | Asks the trigger to start a declared use case now: on an episode (`subject` = the episode id) or, for a schedule use case, its cron job, with what the owner asked for as `focus`. The trigger claims the ledger row, counts the day's budget and delivers the output where the use case says; the tool hands back its answer (`run_id` or `job_id`, the `output` targets) or its reason for refusing. Meant for the chat only: its own machine client, so no run the platform starts holds it. |
 | `get_memory(use_case)`        | The working notes a use case keeps between its runs (`agent_memory`), read with the read role; one that has written nothing reads as empty. |
 | `append_memory(use_case, line)` | Asks the trigger to append one note to that memory. The trigger keeps it to about 8 KB by dropping the oldest lines. Its own machine client with `get_memory`, held only by the runs of use cases that keep a memory. |
 
