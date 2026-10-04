@@ -103,6 +103,24 @@ async def test_a_schedule_run_is_sent_without_a_subject(
     assert json.loads(trigger_router.calls.last.request.content) == {"use_case": "propose-faults"}
 
 
+async def test_a_schedule_run_carries_what_the_owner_asked_for(
+    trigger_client: None, trigger_router: respx.MockRouter
+) -> None:
+    trigger_router.post("/api/runs").mock(
+        return_value=httpx.Response(
+            202,
+            json={"use_case": "propose-faults", "job_id": "b0b000000001", "status": "requested"},
+        )
+    )
+
+    await trigger.start_run("propose-faults", focus="ein Fault für den Trockner")
+
+    assert json.loads(trigger_router.calls.last.request.content) == {
+        "use_case": "propose-faults",
+        "focus": "ein Fault für den Trockner",
+    }
+
+
 @pytest.mark.parametrize(
     ("status", "reason"),
     [

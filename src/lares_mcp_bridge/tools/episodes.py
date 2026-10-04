@@ -53,6 +53,7 @@ async def list_episodes(
     fault: str | None = None,
     days: int = 7,
     only_unjudged: bool = False,
+    only_judged: bool = False,
     limit: int = 100,
 ) -> dict[str, Any]:
     """Episodes overlapping the last ``days``, newest first, each with the
@@ -66,6 +67,8 @@ async def list_episodes(
         raise ValueError(
             f"invalid_state: {state!r}; must be one of {', '.join(get_args(EpisodeState))}"
         )
+    if only_judged and only_unjudged:
+        raise ValueError("invalid_filter: only_judged and only_unjudged exclude each other")
     days = db.window_days(days)
 
     # A named episode is answered whatever its age — the window is for
@@ -89,6 +92,8 @@ async def list_episodes(
         params.append(fault)
     if only_unjudged:
         where_parts.append(sql.SQL("e.verdict IS NULL"))
+    if only_judged:
+        where_parts.append(sql.SQL("e.verdict IS NOT NULL"))
 
     stmt = sql.SQL(
         """
@@ -111,7 +116,12 @@ async def list_episodes(
     return {
         "state": state,
         "days": None if episode_id is not None else days,
-        "filters": {"episode_id": episode_id, "fault": fault, "only_unjudged": only_unjudged},
+        "filters": {
+            "episode_id": episode_id,
+            "fault": fault,
+            "only_unjudged": only_unjudged,
+            "only_judged": only_judged,
+        },
         "limit": result.limit,
         "row_count": len(result.rows),
         "truncated": result.truncated,

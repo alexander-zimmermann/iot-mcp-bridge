@@ -84,13 +84,18 @@ async def post(path: str, body: dict[str, Any], *, refusal: str) -> dict[str, An
     return answer
 
 
-async def start_run(use_case: str, subject: str | None = None) -> dict[str, Any]:
-    """Ask the trigger to start ``use_case`` now, on ``subject`` where it runs on one."""
+async def start_run(
+    use_case: str, subject: str | None = None, focus: str | None = None
+) -> dict[str, Any]:
+    """Ask the trigger to start ``use_case`` now, on ``subject`` where it runs on
+    one, and with ``focus`` — what the owner asked for — where it runs on a schedule."""
     body: dict[str, Any] = {"use_case": use_case}
     if subject is not None:
         body["subject"] = subject
+    if focus is not None:
+        body["focus"] = focus
     answer = await post("/api/runs", body, refusal="run_not_started")
-    log.info("run_started", use_case=use_case, subject=subject, answer=answer)
+    log.info("run_started", use_case=use_case, subject=subject, focus=focus, answer=answer)
     return answer
 
 
