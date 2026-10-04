@@ -434,6 +434,7 @@ async def list_episodes(
     fault: str | None = None,
     days: int = 7,
     only_unjudged: bool = False,
+    only_judged: bool = False,
     limit: int = 100,
 ) -> dict[str, Any]:
     """Situations the detection chain recorded, newest first — the review list.
@@ -441,7 +442,8 @@ async def list_episodes(
     Repeated observations of one fault fold into one episode, and this is the
     list the Basalte mails are the reminder to go through. Each row carries
     the verdict it already has, so ``only_unjudged=True`` is "what still needs
-    judging".
+    judging" and ``only_judged=True`` is what a verdict count reads — the two
+    exclude each other.
 
     * ``episode_id`` — read one episode back by id, whatever its age
     * ``state`` — ``"all"`` | ``"open"`` (still running) | ``"ended"``
@@ -463,6 +465,7 @@ async def list_episodes(
         fault=fault,
         days=days,
         only_unjudged=only_unjudged,
+        only_judged=only_judged,
         limit=limit,
     )
 

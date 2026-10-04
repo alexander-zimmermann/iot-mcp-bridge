@@ -105,6 +105,27 @@ async def test_list_episodes_can_narrow_to_the_unjudged_ones(clean_verdicts: Non
     assert all(r["verdict"] is None for r in unjudged["episodes"])
 
 
+async def test_list_episodes_can_narrow_to_the_judged_ones(clean_verdicts: None) -> None:
+    """What a verdict count reads: every judged episode of the window and
+    nothing else, however many unjudged ones the window holds."""
+    real = await _episode_id("silence", open_only=True)
+    nonsense = await _episode_id("constancy")
+    await verdicts.set_verdict(target="episode", verdict="real", episode_id=real)
+    await verdicts.set_verdict(target="episode", verdict="nonsense", episode_id=nonsense)
+
+    judged = await episodes.list_episodes(days=365, only_judged=True)
+    assert {r["episode_id"]: r["verdict"] for r in judged["episodes"]} == {
+        real: "real",
+        nonsense: "nonsense",
+    }
+    assert judged["filters"]["only_judged"] is True
+
+
+async def test_judged_and_unjudged_exclude_each_other(clean_verdicts: None) -> None:
+    with pytest.raises(ValueError, match="invalid_filter"):
+        await episodes.list_episodes(days=365, only_judged=True, only_unjudged=True)
+
+
 async def test_one_episode_reads_back_outside_the_default_window(clean_verdicts: None) -> None:
     """A verdict must be readable without guessing how wide the window has to
     be — the oldest seeded episode is 40 days back, far outside the default."""
