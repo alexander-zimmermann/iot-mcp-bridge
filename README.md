@@ -212,7 +212,7 @@ All settings are environment variables, prefixed with `MCP_`:
 | `MCP_WIKIJS_URL`                     | —                           | Wiki.js base URL; with the token file enables the wiki tools   |
 | `MCP_WIKIJS_TOKEN_FILE`              | —                           | Read-only Wiki.js API key from a mounted file                  |
 | `MCP_WIKIJS_WRITE_TOKEN_FILE`        | —                           | Wiki.js API key with `write:pages`; enables `update_wiki_page` |
-| `MCP_WIKIJS_LOCALE`                  | `de`                        | Locale `update_wiki_page` looks pages up in and creates them in |
+| `MCP_WIKIJS_LOCALE`                  | `en`                        | Locale `update_wiki_page` looks pages up in and creates them in |
 | `MCP_PBS_URL`                        | —                           | Proxmox Backup Server base URL (`https://<host>:8007`)         |
 | `MCP_PBS_TOKEN_ID`                   | —                           | API token id, `<user>@<realm>!<token name>`                    |
 | `MCP_PBS_TOKEN_FILE`                 | —                           | The token's secret from a mounted file                         |

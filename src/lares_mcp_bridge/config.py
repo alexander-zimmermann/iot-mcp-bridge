@@ -87,7 +87,7 @@ class Settings(BaseSettings):
     # it needs the URL above. A page it creates lives in this locale, and an
     # existing page is looked up there.
     wikijs_write_token_file: str | None = None
-    wikijs_locale: str = "de"
+    wikijs_locale: str = "en"
 
     # Proxmox Backup Server: the backup tools read through an API token with
     # the Audit role. All three must be set (a part alone is a config error);

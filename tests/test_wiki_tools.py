@@ -400,7 +400,7 @@ def _row(page_id: int, path: str, title: str, updated_at: str) -> dict[str, Any]
         "id": page_id,
         "path": path,
         "title": title,
-        "localeCode": "de",
+        "localeCode": "en",
         "updatedAt": updated_at,
     }
 
@@ -442,7 +442,7 @@ async def test_a_new_path_is_created_with_the_write_key(
         "action": "created",
         "id": 31,
         "path": "haus/wartungsplan",
-        "locale": "de",
+        "locale": "en",
         "title": "Wartungsplan",
         "updated_at": "2026-10-03T08:00:00.000Z",
     }
@@ -451,11 +451,11 @@ async def test_a_new_path_is_created_with_the_write_key(
     )
     listed, created = _graphql_bodies(router)
     # The page is looked up in the one locale writes go to.
-    assert listed["variables"] == {"locale": "de"}
+    assert listed["variables"] == {"locale": "en"}
     assert "create(" in created["query"]
     assert created["variables"] == {
         "content": "# Plan\n",
-        "locale": "de",
+        "locale": "en",
         "path": "haus/wartungsplan",
         "title": "Wartungsplan",
     }
@@ -467,7 +467,7 @@ async def test_an_existing_page_keeps_description_tags_and_publication(
     existing = {
         "id": 12,
         "path": "basalte/logic-blocks",
-        "locale": "de",
+        "locale": "en",
         "title": "Basalte Logic Blocks",
         "description": "Reference of the Studio logic blocks",
         "isPublished": True,
@@ -547,7 +547,7 @@ async def test_a_page_without_a_description_keeps_none(
     existing = {
         "id": 7,
         "path": "haus/notizen",
-        "locale": "de",
+        "locale": "en",
         "description": None,
         "isPublished": False,
         "tags": [],
